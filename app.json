@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "FitTapp",
+    "slug": "fittapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0B0C10"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.fittapp.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0C10"
+      },
+      "permissions": [
+        "RECEIVE_BOOT_COMPLETED",
+        "POST_NOTIFICATIONS",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "VIBRATE"
+      ]
+    },
+    "plugins": [
+      "expo-notifications"
+    ]
+  }
+}
