@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity, Platform } from 'react-native';
 import { COLORS, RADII, SPACING, FONTS } from '../theme/theme';
 import { SettingsScreenProps } from '../types';
@@ -23,6 +23,29 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   };
 
   const isBudgetExhausted = appState.attentionBudgetUsed >= appState.attentionBudgetTotal;
+
+  const [cycleIndex, setCycleIndex] = useState<number>(0);
+  const notificationCycle: Array<{ type: 'walk' | 'water' | 'sleep' | 'mood'; label: string }> = [
+    { type: 'walk', label: 'Walk / Stretch' },
+    { type: 'water', label: 'Water (+250ml)' },
+    { type: 'sleep', label: 'Sleep Quality' },
+    { type: 'mood', label: 'Mood & Energy' },
+  ];
+
+  const handleCycleTest = () => {
+    const item = notificationCycle[cycleIndex % notificationCycle.length];
+    onTriggerNotification(item.type);
+    setCycleIndex((prev) => prev + 1);
+  };
+
+  const handleSendAll = () => {
+    onTriggerNotification('walk');
+    setTimeout(() => onTriggerNotification('water'), 1200);
+    setTimeout(() => onTriggerNotification('sleep'), 2400);
+    setTimeout(() => onTriggerNotification('mood'), 3600);
+  };
+
+  const nextNotification = notificationCycle[cycleIndex % notificationCycle.length];
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -73,7 +96,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             })}
           </View>
 
-          {/* Budget Status Alert Box (Vector icon instead of emoji) */}
+          {/* Budget Status Alert Box */}
           <View style={[styles.budgetAlertBox, isBudgetExhausted && styles.budgetAlertBoxExhausted]}>
             <View style={styles.alertIconWrap}>
               {isBudgetExhausted ? (
@@ -89,8 +112,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             </Text>
           </View>
 
-          {/* Test buttons */}
-          <Text style={styles.fieldLabel}>Test Real System Notification:</Text>
+          {/* Individual Category Test Pills */}
+          <Text style={styles.fieldLabel}>Test Single Notification Type:</Text>
           <View style={styles.testNotificationPillsRow}>
             <TouchableOpacity
               style={[styles.testPill, isBudgetExhausted && styles.testPillDisabled]}
@@ -137,16 +160,28 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             </TouchableOpacity>
           </View>
 
+          {/* Cycle & Batch Action Buttons */}
           <View style={styles.testButtonsRow}>
             <TouchableOpacity
               style={[styles.triggerTestButton, isBudgetExhausted && styles.triggerTestButtonDisabled]}
               activeOpacity={0.8}
-              onPress={() => onTriggerNotification('walk')}
+              onPress={handleCycleTest}
               disabled={isBudgetExhausted}
             >
               <SparkleIcon size={14} color={isBudgetExhausted ? COLORS.textMuted : COLORS.textDark} />
-              <Text style={[styles.triggerTestText, isBudgetExhausted && styles.triggerTestTextDisabled]}>
-                {isBudgetExhausted ? 'Blocked by Budget Cap' : 'Send Test Notification'}
+              <Text style={[styles.triggerTestText, isBudgetExhausted && styles.triggerTestTextDisabled]} numberOfLines={1}>
+                {isBudgetExhausted ? 'Blocked by Cap' : `Test: ${nextNotification.label}`}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.triggerTestButton, { backgroundColor: COLORS.surfaceElevated, borderWidth: 1, borderColor: COLORS.border }]}
+              activeOpacity={0.8}
+              onPress={handleSendAll}
+              disabled={isBudgetExhausted}
+            >
+              <Text style={[styles.triggerTestText, { color: COLORS.primaryMint }]}>
+                Send All 4 Types
               </Text>
             </TouchableOpacity>
 
@@ -155,7 +190,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               activeOpacity={0.7}
               onPress={resetDailyBudget}
             >
-              <Text style={styles.resetButtonText}>Reset (0)</Text>
+              <Text style={styles.resetButtonText}>Reset Cap (0)</Text>
             </TouchableOpacity>
           </View>
         </View>

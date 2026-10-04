@@ -1,20 +1,43 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity } from 'react-native';
 import { COLORS, RADII, SPACING, FONTS } from '../theme/theme';
 import { ProgressScreenProps, DayRitual } from '../types';
 import { CheckIcon, SparkleIcon, TabTodayIcon, TabProgressIcon, TabSettingsIcon, WalkIcon, WaterIcon } from './common/Icons';
-
-const DEFAULT_DAYS: DayRitual[] = [
-  { dayName: 'Mon', completed: true },
-  { dayName: 'Tue', completed: true },
-  { dayName: 'Wed', completed: true },
-  { dayName: 'Thu', completed: false },
-  { dayName: 'Fri', completed: true },
-  { dayName: 'Sat', completed: false, isToday: true },
-  { dayName: 'Sun', completed: false },
-];
+import { getZeroUiStats } from '../database/storageService';
 
 export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabChange }) => {
+  // Calculate dynamic weekly rhythm based on actual current day
+  const today = new Date();
+  const todayIndex = (today.getDay() + 6) % 7; // Monday = 0, Sunday = 6
+  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  const weeklyDays: DayRitual[] = dayNames.map((name, idx) => ({
+    dayName: name,
+    completed: idx < todayIndex ? true : idx === todayIndex ? appState.movementDone : false,
+    isToday: idx === todayIndex,
+  }));
+
+  // Real Zero-UI metrics loaded from SQLite database
+  const [zeroUiStats, setZeroUiStats] = useState<{
+    scorePercent: number;
+    lockScreenCount: number;
+    inAppCount: number;
+    totalEvents: number;
+    timeSavedMins: number;
+  }>({
+    scorePercent: 100,
+    lockScreenCount: 0,
+    inAppCount: 0,
+    totalEvents: 0,
+    timeSavedMins: 0,
+  });
+
+  useEffect(() => {
+    getZeroUiStats().then((stats) => {
+      setZeroUiStats(stats);
+    });
+  }, [appState.waterMl, appState.movementDone, appState.sleepQuality, appState.moodLogged]);
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
@@ -42,12 +65,12 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabC
             </View>
           </View>
           <Text style={styles.cardDescription}>
-            We count whole weeks, not fragile single days. One missed day never resets your streak.
+            We count whole weeks, not fragile single days. Today is {dayNames[todayIndex]}. One missed day never resets your streak.
           </Text>
 
           {/* 7 Days Row */}
           <View style={styles.daysRow}>
-            {DEFAULT_DAYS.map((day, idx) => (
+            {weeklyDays.map((day, idx) => (
               <View key={idx} style={styles.dayColumn}>
                 <View
                   style={[
@@ -178,18 +201,26 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabC
 
         {/* 5. Card: Zero-UI Scorecard */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Zero-UI Scorecard</Text>
+          <Text style={styles.cardTitle}>Zero-UI Scorecard (Real Data)</Text>
+          <Text style={styles.cardDescription}>
+            Pokrycie interakcji: ile razy nawyk został zrealizowany prosto z ekranu blokady telefonu vs wewnątrz otwartej aplikacji:
+          </Text>
           <View style={styles.statsBigRow}>
             <View style={styles.bigStatCol}>
-              <Text style={styles.bigStatNumber}>92%</Text>
-              <Text style={styles.bigStatLabel}>Interactions from lock screen</Text>
+              <Text style={styles.bigStatNumber}>{zeroUiStats.scorePercent}%</Text>
+              <Text style={styles.bigStatLabel}>Z ekranu blokady</Text>
             </View>
             <View style={styles.bigStatDivider} />
             <View style={styles.bigStatCol}>
-              <Text style={styles.bigStatNumber}>48 min</Text>
-              <Text style={styles.bigStatLabel}>Saved this week</Text>
+              <Text style={styles.bigStatNumber}>{zeroUiStats.timeSavedMins} min</Text>
+              <Text style={styles.bigStatLabel}>Czas zaoszczędzony</Text>
             </View>
           </View>
+          <Text style={styles.budgetNote}>
+            {zeroUiStats.totalEvents > 0
+              ? `${zeroUiStats.lockScreenCount} z ${zeroUiStats.totalEvents} akcji zarejestrowano bezpośrednio z powiadomień (${zeroUiStats.inAppCount} w aplikacji). Szacunek: ~35s zaoszczędzone na każdym kliknięciu z ekranu blokady.`
+              : 'Brak zarejestrowanych akcji w bazie SQLite. Kliknij przycisk na powiadomieniu (np. "+250ml Drink"), aby zaktualizować statystyki na żywo.'}
+          </Text>
         </View>
       </ScrollView>
 

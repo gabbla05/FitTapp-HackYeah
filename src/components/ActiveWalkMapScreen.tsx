@@ -25,6 +25,7 @@ import {
   SearchIcon,
   RefreshIcon,
 } from './common/Icons';
+import { detectCurrentLocation } from '../services/weatherService';
 
 interface ActiveWalkMapScreenProps {
   onFinishWalk: (feedback: ActivityFeedback, distanceKm: number) => void;
@@ -81,10 +82,13 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [searchFeedback, setSearchFeedback] = useState<string | null>(null);
 
-  // Walk metrics
-  const [distanceKm, setDistanceKm] = useState<number>(0.42);
-  const [seconds, setSeconds] = useState<number>(315); // ~5m 15s
-  const [steps, setSteps] = useState<number>(580);
+  // Map theme toggle: 'dark' (ESRI World Dark Gray) or 'street' (OpenStreetMap)
+  const [mapTheme, setMapTheme] = useState<'dark' | 'street'>('dark');
+
+  // Walk metrics (Starting strictly at 0:00, 0.00km, 0 steps - no artificial increments)
+  const [distanceKm, setDistanceKm] = useState<number>(0.0);
+  const [seconds, setSeconds] = useState<number>(0);
+  const [steps, setSteps] = useState<number>(0);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isFinished, setIsFinished] = useState<boolean>(false);
   const [selectedFeedback, setSelectedFeedback] = useState<ActivityFeedback | null>(null);
@@ -249,8 +253,17 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
   };
 
   useEffect(() => {
+    // 1. Immediately center map on user's real location via fast IP lookup
+    detectCurrentLocation().then((loc) => {
+      setUserLocation({ lat: loc.lat, lng: loc.lng });
+      setLocationLabel(loc.label);
+      setGpsStatus(`Live • ${loc.label}`);
+    });
+
+    // 2. Refine with hardware GPS
     detectLiveLocation();
 
+    // 3. Watch continuous movement, filtering jitter under 8 meters
     let watchId: number | null = null;
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       watchId = navigator.geolocation.watchPosition(
@@ -263,12 +276,15 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
 
           if (prevLocationRef.current) {
             const addedDist = calculateDistance(prevLocationRef.current, newPos);
-            if (addedDist > 0.001) {
+            // Require at least 8 meters of real movement to filter GPS jitter while sitting still
+            if (addedDist >= 0.008 && addedDist < 0.3) {
               setDistanceKm((prev) => +(prev + addedDist).toFixed(2));
               setSteps((prev) => prev + Math.round(addedDist * 1350));
+              prevLocationRef.current = newPos;
             }
+          } else {
+            prevLocationRef.current = newPos;
           }
-          prevLocationRef.current = newPos;
         },
         () => {},
         { enableHighAccuracy: true, maximumAge: 5000 }
@@ -288,8 +304,6 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
 
     const interval = setInterval(() => {
       setSeconds((prev) => prev + 1);
-      setDistanceKm((prev) => +(prev + 0.0014).toFixed(2));
-      setSteps((prev) => prev + 2);
     }, 1000);
 
     return () => clearInterval(interval);
@@ -342,10 +356,16 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
         const left = width / 2 + (tx * TILE_SIZE - effectiveCenter.x);
         const top = height / 2 + (ty * TILE_SIZE - effectiveCenter.y);
 
-        // CartoDB Dark Matter tiles (high-contrast, dark mode, reliable OSM data)
-        const url = `https://a.basemaps.cartocdn.com/rastertiles/dark_all/${zoom}/${wrappedX}/${ty}.png`;
+        // 100% Free Keyless Tiles (No API key needed)
+        // Dark theme: ESRI World Dark Gray Canvas
+        // Street theme: OpenStreetMap standard cartography
+        const url =
+          mapTheme === 'dark'
+            ? `https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/${zoom}/${ty}/${wrappedX}`
+            : `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${ty}.png`;
+
         result.push({
-          key: `${zoom}-${tx}-${ty}`,
+          key: `${mapTheme}-${zoom}-${tx}-${ty}`,
           url,
           left,
           top,
@@ -353,7 +373,7 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
       }
     }
     return result;
-  }, [containerSize, effectiveCenter, zoom]);
+  }, [containerSize, effectiveCenter, zoom, mapTheme]);
 
   // Screen coordinates for user GPS marker
   const userMarkerPos = {
@@ -456,7 +476,10 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
         {tiles.map((tile) => (
           <Image
             key={tile.key}
-            source={{ uri: tile.url }}
+            source={{
+              uri: tile.url,
+              headers: { 'User-Agent': 'FitTapp-App/1.0 (contact@fittapp.app)' },
+            }}
             style={{
               position: 'absolute',
               left: tile.left,
@@ -504,7 +527,7 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
           <Text style={styles.mapFloatingTagText}>Live Route • {locationLabel}</Text>
         </View>
 
-        {/* Map Floating Controls (+ / - / Re-center) */}
+        {/* Map Floating Controls (+ / - / Re-center / Theme) */}
         <View style={styles.mapControlsColumn}>
           <TouchableOpacity style={styles.controlPill} activeOpacity={0.8} onPress={handleZoomIn}>
             <Text style={styles.controlPillText}>+</Text>
@@ -516,6 +539,16 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
 
           <TouchableOpacity style={styles.controlPill} activeOpacity={0.8} onPress={handleRecenter}>
             <TargetGpsIcon size={16} color={COLORS.primaryMint} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.controlPill}
+            activeOpacity={0.8}
+            onPress={() => setMapTheme((prev) => (prev === 'dark' ? 'street' : 'dark'))}
+          >
+            <Text style={[styles.controlPillText, { fontSize: 9, fontFamily: FONTS.mono }]}>
+              {mapTheme === 'dark' ? 'DARK' : 'OSM'}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>

@@ -396,3 +396,51 @@ export async function calibrateAdaptiveGoal(
 
   return nextTarget;
 }
+
+/**
+ * Zero-UI Scorecard: Computes real mathematical ratio of lock-screen interactions vs in-app
+ */
+export async function getZeroUiStats(): Promise<{
+  scorePercent: number;
+  lockScreenCount: number;
+  inAppCount: number;
+  totalEvents: number;
+  timeSavedMins: number;
+}> {
+  let events: HabitEventRecord[] = [];
+
+  if (nativeDb) {
+    try {
+      const rows: any = await nativeDb.getAllAsync(
+        `SELECT source FROM habit_events`
+      );
+      events = rows || [];
+    } catch (e) {
+      console.warn('Error reading events for Zero-UI scorecard:', e);
+    }
+  }
+
+  if (events.length === 0 && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem('fittapp_db_events');
+      if (raw) events = JSON.parse(raw);
+    } catch {}
+  }
+
+  const lockScreenCount = events.filter((e) => e.source === 'lock_push').length;
+  const inAppCount = events.filter((e) => e.source === 'in_app' || e.source === 'live_activity').length;
+  const totalEvents = lockScreenCount + inAppCount;
+
+  // If no events yet recorded, default to 100% Zero-UI potential, 0 minutes saved
+  const scorePercent = totalEvents > 0 ? Math.round((lockScreenCount / totalEvents) * 100) : 100;
+  // Estimated 35 seconds saved per lock-screen interaction (vs opening, unlocking phone, navigating tabs)
+  const timeSavedMins = Math.round((lockScreenCount * 35) / 60);
+
+  return {
+    scorePercent,
+    lockScreenCount,
+    inAppCount,
+    totalEvents,
+    timeSavedMins,
+  };
+}

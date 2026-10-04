@@ -66,18 +66,92 @@ export function interpretWmoCode(code: number): { description: string; isRain: b
 }
 
 /**
+ * High-speed network IP geolocator fallback (works immediately on Android and Web)
+ */
+export async function detectCurrentLocation(): Promise<{
+  lat: number;
+  lng: number;
+  label: string;
+}> {
+  // Check cached coordinates first
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const saved = window.localStorage.getItem('fittapp_last_coord');
+      const savedLabel = window.localStorage.getItem('fittapp_last_label');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed?.lat === 'number' && typeof parsed?.lng === 'number') {
+          return {
+            lat: parsed.lat,
+            lng: parsed.lng,
+            label: savedLabel || 'Current Location',
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // Fast Tier 1: ip-api.com (50ms response in Poland/Europe)
+  try {
+    const res = await fetch('http://ip-api.com/json/?fields=status,country,city,lat,lon');
+    const data = await res.json();
+    if (data && data.status === 'success' && data.lat && data.lon) {
+      const coord = {
+        lat: data.lat,
+        lng: data.lon,
+        label: `${data.city || 'Local Area'}, ${data.country || 'Poland'}`,
+      };
+      if (typeof window !== 'undefined' && window.localStorage) {
+        try {
+          window.localStorage.setItem('fittapp_last_coord', JSON.stringify(coord));
+          window.localStorage.setItem('fittapp_last_label', coord.label);
+        } catch {}
+      }
+      return coord;
+    }
+  } catch {}
+
+  // Tier 2: ipwho.is
+  try {
+    const res2 = await fetch('https://ipwho.is/');
+    const data2 = await res2.json();
+    if (data2 && data2.success && data2.latitude && data2.longitude) {
+      const coord = {
+        lat: data2.latitude,
+        lng: data2.longitude,
+        label: `${data2.city || 'Local Area'}, ${data2.country || 'Poland'}`,
+      };
+      return coord;
+    }
+  } catch {}
+
+  // Default fallback (Kraków)
+  return { lat: 50.0697, lng: 19.9422, label: 'Kraków, Poland' };
+}
+
+/**
  * Fetches real-time weather from Open-Meteo API using device coordinates.
  * Open-Meteo is free, keyless, and provides hyper-accurate WMO codes & temperature.
  */
 export async function fetchLiveWeather(
-  lat: number = 51.7972,
-  lng: number = 18.3401,
+  lat?: number,
+  lng?: number,
   locationName?: string
 ): Promise<LiveWeatherData> {
+  let targetLat = lat;
+  let targetLng = lng;
+  let targetLabel = locationName;
+
+  if (typeof targetLat !== 'number' || typeof targetLng !== 'number') {
+    const detected = await detectCurrentLocation();
+    targetLat = detected.lat;
+    targetLng = detected.lng;
+    targetLabel = targetLabel || detected.label;
+  }
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${targetLat.toFixed(
       4
-    )}&longitude=${lng.toFixed(
+    )}&longitude=${targetLng.toFixed(
       4
     )}&current=temperature_2m,precipitation,rain,weather_code&timezone=auto`;
 
@@ -109,7 +183,7 @@ export async function fetchLiveWeather(
       weatherDescription: description,
       isRaining,
       precipitationMm: precipitation,
-      locationName: locationName || 'Local Area',
+      locationName: targetLabel || 'Local Area',
       lastUpdated: timeStr,
     };
   } catch (error) {

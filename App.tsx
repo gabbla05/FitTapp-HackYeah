@@ -14,7 +14,7 @@ import { SettingsScreen } from './src/components/SettingsScreen';
 import { OnboardingScreen } from './src/components/OnboardingScreen';
 import { COLORS } from './src/theme/theme';
 import { ActivityFeedback, ActivityType, AppStateData } from './src/types';
-import { fetchLiveWeather } from './src/services/weatherService';
+import { fetchLiveWeather, detectCurrentLocation } from './src/services/weatherService';
 import {
   initDatabase,
   getUserProfile,
@@ -198,27 +198,12 @@ export default function App() {
   }, []);
 
   // Load Real Weather from Open-Meteo API using device coordinates
-  const loadLiveWeather = () => {
-    let lat = 51.7972;
-    let lng = 18.3401;
-    let locationLabel = 'Koźminek, Poland';
+  const loadLiveWeather = async () => {
+    // 1. Detect location dynamically (via cached coords or fast IP lookup)
+    const detected = await detectCurrentLocation();
 
-    if (typeof window !== 'undefined' && window.localStorage) {
-      try {
-        const saved = window.localStorage.getItem('fittapp_last_coord');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (typeof parsed?.lat === 'number' && typeof parsed?.lng === 'number') {
-            lat = parsed.lat;
-            lng = parsed.lng;
-          }
-        }
-        const savedLabel = window.localStorage.getItem('fittapp_last_label');
-        if (savedLabel) locationLabel = savedLabel;
-      } catch {}
-    }
-
-    fetchLiveWeather(lat, lng, locationLabel).then((weatherData) => {
+    // 2. Fetch live weather for user's actual city / region
+    fetchLiveWeather(detected.lat, detected.lng, detected.label).then((weatherData) => {
       setAppState((prev) => ({
         ...prev,
         weather: weatherData.condition,
@@ -232,10 +217,11 @@ export default function App() {
       }));
     });
 
+    // 3. If high-accuracy GPS responds, refine with hyper-local coordinates
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          fetchLiveWeather(pos.coords.latitude, pos.coords.longitude, locationLabel).then(
+          fetchLiveWeather(pos.coords.latitude, pos.coords.longitude, detected.label).then(
             (weatherData) => {
               setAppState((prev) => ({
                 ...prev,
@@ -252,7 +238,7 @@ export default function App() {
           );
         },
         () => {},
-        { enableHighAccuracy: false, timeout: 6000, maximumAge: 300000 }
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
       );
     }
   };
