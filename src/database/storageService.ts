@@ -259,9 +259,9 @@ export async function getTodayHabitSummary(): Promise<{
   let waterMl = 0;
   let movementDone = false;
   let movementType: 'walk' | 'stretch' | null = null;
-  let sleepHours = 7.5;
-  let sleepQuality = 'Rested';
-  let moodLogged = 'Calm';
+  let sleepHours = 0;
+  let sleepQuality = 'Not logged yet';
+  let moodLogged = 'Not logged yet';
   let foodLogged = false;
 
   for (const ev of events) {
@@ -287,7 +287,7 @@ export async function getTodayHabitSummary(): Promise<{
   }
 
   return {
-    waterMl: waterMl || 1250, // default seed if fresh
+    waterMl, // Pure zero if fresh; learns entirely from user's actual responses
     movementDone,
     movementType,
     sleepHours,
@@ -298,7 +298,7 @@ export async function getTodayHabitSummary(): Promise<{
 }
 
 /**
- * Gets Attention Budget status for today
+ * Gets Attention Budget status for today (clean start: 0/3)
  */
 export async function getAttentionBudgetStatus(): Promise<{
   pushedCount: number;
@@ -306,7 +306,7 @@ export async function getAttentionBudgetStatus(): Promise<{
   remaining: number;
 }> {
   const todayStr = new Date().toISOString().slice(0, 10);
-  let pushedCount = 1;
+  let pushedCount = 0;
   let dailyCap = 3;
 
   if (nativeDb) {
@@ -324,7 +324,7 @@ export async function getAttentionBudgetStatus(): Promise<{
     const raw = window.localStorage.getItem(`fittapp_budget_${todayStr}`);
     if (raw) {
       const parsed = JSON.parse(raw);
-      pushedCount = parsed.pushedCount ?? 1;
+      pushedCount = parsed.pushedCount ?? 0;
       dailyCap = parsed.dailyCap ?? 3;
     }
   }
@@ -334,6 +334,94 @@ export async function getAttentionBudgetStatus(): Promise<{
     dailyCap,
     remaining: Math.max(0, dailyCap - pushedCount),
   };
+}
+
+/**
+ * Calculates dynamic weekly rhythm: only marks days as completed if real events exist
+ */
+export async function getWeeklyRitualDays(): Promise<
+  Array<{ dayName: string; completed: boolean; isToday?: boolean }>
+> {
+  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const now = new Date();
+  const todayIdx = (now.getDay() + 6) % 7; // Monday = 0, Sunday = 6
+
+  // Monday of the current week at 00:00:00
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - todayIdx);
+  monday.setHours(0, 0, 0, 0);
+
+  const activeDaysSet = new Set<number>();
+
+  let events: HabitEventRecord[] = [];
+  if (nativeDb) {
+    try {
+      const rows: any = await nativeDb.getAllAsync(
+        `SELECT created_at FROM habit_events WHERE created_at >= ?`,
+        [monday.toISOString()]
+      );
+      events = rows || [];
+    } catch (e) {
+      console.warn('Error fetching weekly events from SQLite:', e);
+    }
+  }
+
+  if (events.length === 0 && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem('fittapp_db_events');
+      if (raw) {
+        const all: HabitEventRecord[] = JSON.parse(raw);
+        events = all.filter((e) => new Date(e.created_at) >= monday);
+      }
+    } catch {}
+  }
+
+  for (const ev of events) {
+    const d = new Date(ev.created_at);
+    const dayIdx = (d.getDay() + 6) % 7;
+    activeDaysSet.add(dayIdx);
+  }
+
+  return dayNames.map((name, idx) => ({
+    dayName: name,
+    completed: activeDaysSet.has(idx),
+    isToday: idx === todayIdx,
+  }));
+}
+
+/**
+ * Calculates real consecutive streak weeks from SQLite records (starts at 0 for fresh app)
+ */
+export async function getRealStreakWeeks(): Promise<number> {
+  let events: { created_at: string }[] = [];
+  if (nativeDb) {
+    try {
+      const rows: any = await nativeDb.getAllAsync(
+        `SELECT DISTINCT created_at FROM habit_events ORDER BY created_at ASC`
+      );
+      events = rows || [];
+    } catch {}
+  }
+  if (events.length === 0 && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem('fittapp_db_events');
+      if (raw) events = JSON.parse(raw);
+    } catch {}
+  }
+
+  if (events.length === 0) return 0;
+
+  const weekSet = new Set<string>();
+  for (const ev of events) {
+    const d = new Date(ev.created_at);
+    const year = d.getFullYear();
+    const oneJan = new Date(d.getFullYear(), 0, 1);
+    const numberOfDays = Math.floor((d.getTime() - oneJan.getTime()) / (24 * 60 * 60 * 1000));
+    const week = Math.ceil((d.getDay() + 1 + numberOfDays) / 7);
+    weekSet.add(`${year}-${week}`);
+  }
+
+  return weekSet.size;
 }
 
 /**

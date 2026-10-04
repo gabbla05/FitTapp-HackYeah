@@ -74,8 +74,8 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const panOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Path history for breadcrumb polyline
-  const [pathHistory, setPathHistory] = useState<Coordinate[]>([DEFAULT_COORD]);
+  // Path history for breadcrumb polyline (Starts strictly empty so no phantom lines are drawn)
+  const [pathHistory, setPathHistory] = useState<Coordinate[]>([]);
 
   // Search drawer state
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
@@ -148,7 +148,6 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
 
   const saveAndSetLocation = (coord: Coordinate, label?: string) => {
     setUserLocation(coord);
-    setPathHistory((prev) => [...prev, coord]);
 
     if (label) {
       setLocationLabel(label);
@@ -210,6 +209,7 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
       };
 
       saveAndSetLocation(current);
+      setPathHistory([current]); // Start trail strictly from real current position
       prevLocationRef.current = current;
       setIsLocating(false);
       handleRecenter();
@@ -307,6 +307,7 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
             lng: pos.coords.longitude,
           };
           saveAndSetLocation(current);
+          setPathHistory([current]); // Start path only from verified GPS fix
           prevLocationRef.current = current;
           setIsLocating(false);
           handleRecenter();
@@ -332,7 +333,7 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
           {
             accuracy: Location.Accuracy.High,
             timeInterval: 2000,
-            distanceInterval: 4,
+            distanceInterval: 5,
           },
           (location) => {
             if (!isMounted) return;
@@ -340,18 +341,21 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
               lat: location.coords.latitude,
               lng: location.coords.longitude,
             };
-            saveAndSetLocation(newPos);
 
             if (prevLocationRef.current) {
               const addedDist = calculateDistance(prevLocationRef.current, newPos);
-              // Filter out GPS drift (under 5m) while sitting still
-              if (addedDist >= 0.005 && addedDist < 0.3) {
+              // Require at least 8 meters of real movement to filter GPS jitter while sitting still
+              if (addedDist >= 0.008 && addedDist < 0.3) {
                 setDistanceKm((prev) => +(prev + addedDist).toFixed(2));
                 setSteps((prev) => prev + Math.round(addedDist * 1350));
+                setUserLocation(newPos);
+                setPathHistory((prev) => [...prev, newPos]);
                 prevLocationRef.current = newPos;
               }
             } else {
               prevLocationRef.current = newPos;
+              setUserLocation(newPos);
+              setPathHistory([newPos]);
             }
           }
         );
@@ -457,8 +461,9 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
     y: containerSize.height / 2 + panOffset.y,
   };
 
-  // SVG Polyline coordinates for walked path
+  // SVG Polyline coordinates for walked path (Only drawn when at least 2 distinct GPS points exist)
   const polylinePoints = useMemo(() => {
+    if (pathHistory.length < 2) return '';
     return pathHistory
       .map((pt) => {
         const merc = latLngToMercator(pt.lat, pt.lng, zoom);

@@ -24,6 +24,8 @@ import {
   getAttentionBudgetStatus,
   logHabitEvent,
   incrementAttentionBudget,
+  getRealStreakWeeks,
+  calibrateAdaptiveGoal,
 } from './src/database/storageService';
 import {
   registerNotificationCategories,
@@ -46,23 +48,23 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'today' | 'progress' | 'settings'>('today');
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 
-  // Global State for FitTapp
+  // Global State for FitTapp - Completely clean start, learns from user responses
   const [appState, setAppState] = useState<AppStateData>({
     userName: '',
-    streakWeeks: 5,
-    attentionBudgetUsed: 1,
+    streakWeeks: 0,
+    attentionBudgetUsed: 0,
     attentionBudgetTotal: 3,
     weather: 'sunny',
 
-    // 5 Health Pillars
-    waterMl: 1250,
+    // 5 Health Pillars - Pure clean state
+    waterMl: 0,
     waterGoalMl: 2000,
     movementDone: false,
     movementType: null,
-    sleepHours: 7.5,
-    sleepQuality: 'Deep sleep (logged AM)',
-    moodLogged: 'Calm',
-    foodLogged: true,
+    sleepHours: 0,
+    sleepQuality: 'Not logged yet',
+    moodLogged: 'Not logged yet',
+    foodLogged: false,
 
     // Settings
     quietHoursStart: '22:00',
@@ -91,6 +93,7 @@ export default function App() {
     try {
       const summary = await getTodayHabitSummary();
       const budget = await getAttentionBudgetStatus();
+      const streakWeeks = await getRealStreakWeeks();
       setAppState((prev) => ({
         ...prev,
         waterMl: summary.waterMl,
@@ -102,6 +105,7 @@ export default function App() {
         foodLogged: summary.foodLogged,
         attentionBudgetUsed: budget.pushedCount,
         attentionBudgetTotal: budget.dailyCap,
+        streakWeeks,
       }));
     } catch (e) {
       console.warn('Error reading updated habit summary from DB:', e);
@@ -369,10 +373,15 @@ export default function App() {
     });
   };
 
-  const handleFinishActivity = (feedback: ActivityFeedback, type: 'stretch' | 'walk') => {
+  const handleFinishActivity = (
+    feedback: ActivityFeedback,
+    type: 'stretch' | 'walk',
+    distanceKm?: number
+  ) => {
+    const value = type === 'walk' ? (distanceKm && distanceKm > 0 ? distanceKm : 1.0) : 2.0;
     logHabitEvent({
       category: 'movement',
-      value_num: type === 'walk' ? 1.4 : 2.0,
+      value_num: value,
       value_text: type,
       feedback,
       weather_condition: appState.weather,
@@ -380,11 +389,8 @@ export default function App() {
       source: 'live_activity',
     });
 
-    handleUpdateState((prev) => ({
-      ...prev,
-      movementDone: true,
-      movementType: type,
-    }));
+    calibrateAdaptiveGoal(type === 'walk' ? 'walk_distance' : 'desk_stretch_duration', feedback);
+    syncTodayStateFromDb();
     setCurrentRoute('app');
     setActiveTab('today');
   };
@@ -474,7 +480,7 @@ export default function App() {
         {/* ROUTE 1: In-App Live GPS Map Screen (Opened only when starting a walk or via notification) */}
         {currentRoute === 'walk_map' && (
           <ActiveWalkMapScreen
-            onFinishWalk={(feedback) => handleFinishActivity(feedback, 'walk')}
+            onFinishWalk={(feedback, distanceKm) => handleFinishActivity(feedback, 'walk', distanceKm)}
             onBack={() => {
               setCurrentRoute('app');
               setActiveTab('today');

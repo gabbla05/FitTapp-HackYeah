@@ -214,7 +214,7 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
 
               <Text style={styles.habitCategory}>Nutrition</Text>
               <Text style={styles.habitValueMain}>
-                {appState.foodLogged ? 'Logged' : 'Light snack'}
+                {appState.foodLogged ? 'Logged' : 'Not logged'}
               </Text>
 
               <TouchableOpacity
@@ -243,7 +243,9 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
               </View>
 
               <Text style={styles.habitCategory}>Sleep</Text>
-              <Text style={styles.habitValueBig}>{appState.sleepHours}h</Text>
+              <Text style={styles.habitValueBig}>
+                {appState.sleepHours > 0 ? `${appState.sleepHours}h` : '—'}
+              </Text>
               <Text style={styles.habitSubtext}>{appState.sleepQuality}</Text>
             </TouchableOpacity>
           </View>
@@ -259,8 +261,8 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
             </View>
             <View style={styles.moodTextCol}>
               <Text style={styles.habitCategory}>Mood & Energy (Evening check-in)</Text>
-              <Text style={styles.habitValueMain}>{appState.moodLogged || 'Calm'}</Text>
-              <Text style={styles.habitSubtext}>Tap to toggle between energy states</Text>
+              <Text style={styles.habitValueMain}>{appState.moodLogged || 'Not logged yet'}</Text>
+              <Text style={styles.habitSubtext}>Learns from your lock-screen replies</Text>
             </View>
             <View style={styles.moodClickHint}>
               <Text style={styles.moodClickHintText}>Change ❯</Text>

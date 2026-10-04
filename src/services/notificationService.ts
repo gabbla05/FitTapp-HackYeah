@@ -43,21 +43,21 @@ export async function registerNotificationCategories(): Promise<void> {
       });
     }
 
-    // 1. Water
+    // 1. Water (Silent background action)
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.WATER, [
       {
         identifier: 'ACTION_DRINK_250',
         buttonTitle: 'Drank it (+250ml)',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
       {
         identifier: 'ACTION_SNOOZE',
         buttonTitle: 'Snooze 1h',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
     ]);
 
-    // 2. Outdoor Walk
+    // 2. Outdoor Walk (Opens live walk GPS map!)
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.MOVEMENT_WALK, [
       {
         identifier: 'ACTION_START_WALK',
@@ -67,59 +67,59 @@ export async function registerNotificationCategories(): Promise<void> {
       {
         identifier: 'ACTION_SKIP',
         buttonTitle: 'Not now',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
     ]);
 
-    // 3. Desk Stretch
+    // 3. Desk Stretch (Silent background action)
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.MOVEMENT_STRETCH, [
       {
         identifier: 'ACTION_START_STRETCH',
-        buttonTitle: 'Start 2m Stretch',
-        options: { opensAppToForeground: true },
+        buttonTitle: 'Done Stretch (2m)',
+        options: { opensAppToForeground: false },
       },
       {
         identifier: 'ACTION_SKIP',
         buttonTitle: 'Not today',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
     ]);
 
-    // 4. Sleep
+    // 4. Sleep (Silent background action)
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.SLEEP, [
       {
         identifier: 'ACTION_SLEEP_RESTED',
         buttonTitle: 'Rested',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
       {
         identifier: 'ACTION_SLEEP_MODERATE',
         buttonTitle: 'Moderate',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
       {
         identifier: 'ACTION_SLEEP_FATIGUED',
         buttonTitle: 'Fatigued',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
     ]);
 
-    // 5. Mood
+    // 5. Mood (Silent background action)
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.MOOD, [
       {
         identifier: 'ACTION_MOOD_CALM',
         buttonTitle: 'Calm',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
       {
         identifier: 'ACTION_MOOD_FLOW',
         buttonTitle: 'Flow',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
       {
         identifier: 'ACTION_MOOD_TENSE',
         buttonTitle: 'Tense',
-        options: { opensAppToForeground: true },
+        options: { opensAppToForeground: false },
       },
     ]);
   } catch (err) {

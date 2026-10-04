@@ -3,19 +3,13 @@ import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity } fr
 import { COLORS, RADII, SPACING, FONTS } from '../theme/theme';
 import { ProgressScreenProps, DayRitual } from '../types';
 import { CheckIcon, SparkleIcon, TabTodayIcon, TabProgressIcon, TabSettingsIcon, WalkIcon, WaterIcon } from './common/Icons';
-import { getZeroUiStats } from '../database/storageService';
+import { getZeroUiStats, getWeeklyRitualDays } from '../database/storageService';
 
 export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabChange }) => {
-  // Calculate dynamic weekly rhythm based on actual current day
+  const [weeklyDays, setWeeklyDays] = useState<DayRitual[]>([]);
   const today = new Date();
-  const todayIndex = (today.getDay() + 6) % 7; // Monday = 0, Sunday = 6
-  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-  const weeklyDays: DayRitual[] = dayNames.map((name, idx) => ({
-    dayName: name,
-    completed: idx < todayIndex ? true : idx === todayIndex ? appState.movementDone : false,
-    isToday: idx === todayIndex,
-  }));
+  const todayIndex = (today.getDay() + 6) % 7;
+  const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
   // Real Zero-UI metrics loaded from SQLite database
   const [zeroUiStats, setZeroUiStats] = useState<{
@@ -33,9 +27,8 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabC
   });
 
   useEffect(() => {
-    getZeroUiStats().then((stats) => {
-      setZeroUiStats(stats);
-    });
+    getWeeklyRitualDays().then(setWeeklyDays);
+    getZeroUiStats().then(setZeroUiStats);
   }, [appState.waterMl, appState.movementDone, appState.sleepQuality, appState.moodLogged]);
 
   return (
