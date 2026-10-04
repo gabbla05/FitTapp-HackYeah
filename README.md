@@ -1,4 +1,4 @@
-# FitTapp (Zero-UI Habit Assistant)
+# FitTapp (Minimal-UI Habit Assistant)
 
 > A habit tracking and contextual health recommendation mobile app that shifts 90% of user interactions to **actionable lock-screen push notifications** and **Live Activities**.
 >
