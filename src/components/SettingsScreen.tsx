@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity, Platform } from 'react-native';
 import { COLORS, RADII, SPACING, FONTS } from '../theme/theme';
 import { SettingsScreenProps } from '../types';
 import { SparkleIcon, SunIcon, CloudRainIcon, TabTodayIcon, TabProgressIcon, TabSettingsIcon, CheckIcon, ShieldIcon, ShieldLockIcon } from './common/Icons';
@@ -90,15 +90,63 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           </View>
 
           {/* Test buttons */}
+          <Text style={styles.fieldLabel}>Test Real System Notification:</Text>
+          <View style={styles.testNotificationPillsRow}>
+            <TouchableOpacity
+              style={[styles.testPill, isBudgetExhausted && styles.testPillDisabled]}
+              activeOpacity={0.8}
+              onPress={() => onTriggerNotification('walk')}
+              disabled={isBudgetExhausted}
+            >
+              <Text style={[styles.testPillText, isBudgetExhausted && styles.testPillTextDisabled]}>
+                Walk / Stretch
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.testPill, isBudgetExhausted && styles.testPillDisabled]}
+              activeOpacity={0.8}
+              onPress={() => onTriggerNotification('water')}
+              disabled={isBudgetExhausted}
+            >
+              <Text style={[styles.testPillText, isBudgetExhausted && styles.testPillTextDisabled]}>
+                Water (+250ml)
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.testPill, isBudgetExhausted && styles.testPillDisabled]}
+              activeOpacity={0.8}
+              onPress={() => onTriggerNotification('sleep')}
+              disabled={isBudgetExhausted}
+            >
+              <Text style={[styles.testPillText, isBudgetExhausted && styles.testPillTextDisabled]}>
+                Sleep Quality
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.testPill, isBudgetExhausted && styles.testPillDisabled]}
+              activeOpacity={0.8}
+              onPress={() => onTriggerNotification('mood')}
+              disabled={isBudgetExhausted}
+            >
+              <Text style={[styles.testPillText, isBudgetExhausted && styles.testPillTextDisabled]}>
+                Mood & Energy
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           <View style={styles.testButtonsRow}>
             <TouchableOpacity
               style={[styles.triggerTestButton, isBudgetExhausted && styles.triggerTestButtonDisabled]}
               activeOpacity={0.8}
-              onPress={onTriggerNotification}
+              onPress={() => onTriggerNotification('walk')}
+              disabled={isBudgetExhausted}
             >
               <SparkleIcon size={14} color={isBudgetExhausted ? COLORS.textMuted : COLORS.textDark} />
               <Text style={[styles.triggerTestText, isBudgetExhausted && styles.triggerTestTextDisabled]}>
-                {isBudgetExhausted ? 'Blocked by Budget Cap' : 'Test Push Notification'}
+                {isBudgetExhausted ? 'Blocked by Budget Cap' : 'Send Test Notification'}
               </Text>
             </TouchableOpacity>
 
@@ -399,6 +447,36 @@ const styles = StyleSheet.create({
   },
   budgetAlertTextExhausted: {
     color: COLORS.softCoral,
+  },
+  testNotificationPillsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: SPACING.md,
+  },
+  testPill: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    height: 38,
+    backgroundColor: COLORS.surfaceElevated,
+    borderRadius: RADII.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(52, 211, 153, 0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  testPillDisabled: {
+    borderColor: COLORS.border,
+    opacity: 0.5,
+  },
+  testPillText: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.primaryMint,
+  },
+  testPillTextDisabled: {
+    color: COLORS.textMuted,
   },
   testButtonsRow: {
     flexDirection: 'row',

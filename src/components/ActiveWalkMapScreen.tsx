@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,11 @@ import {
   Platform,
   TextInput,
   ActivityIndicator,
+  Image,
+  PanResponder,
+  LayoutChangeEvent,
 } from 'react-native';
+import Svg, { Polyline, Circle as SvgCircle, G } from 'react-native-svg';
 import { COLORS, RADII, SPACING, FONTS } from '../theme/theme';
 import { ActivityFeedback } from '../types';
 import {
@@ -32,78 +36,115 @@ interface Coordinate {
   lng: number;
 }
 
+const TILE_SIZE = 256;
+
 // Default base coordinates (Koźminek, Greater Poland)
 const DEFAULT_COORD: Coordinate = { lat: 51.7972, lng: 18.3401 };
 
-const getSavedLocation = (): Coordinate => {
-  if (typeof window !== 'undefined' && window.localStorage) {
-    try {
-      const saved = window.localStorage.getItem('fittapp_last_coord');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed?.lat === 'number' && typeof parsed?.lng === 'number') {
-          return parsed;
-        }
-      }
-    } catch {}
-  }
-  return DEFAULT_COORD;
-};
-
-const getSavedLabel = (): string => {
-  if (typeof window !== 'undefined' && window.localStorage) {
-    try {
-      const label = window.localStorage.getItem('fittapp_last_label');
-      if (label) return label;
-    } catch {}
-  }
-  return 'Koźminek, Poland';
-};
+/**
+ * High-precision Mercator projection for Web Mercator / Slippy Map tiles
+ */
+function latLngToMercator(lat: number, lng: number, zoom: number): { x: number; y: number } {
+  const n = Math.pow(2, zoom);
+  const x = ((lng + 180) / 360) * n * TILE_SIZE;
+  const clampedLat = Math.max(-85.0511, Math.min(85.0511, lat));
+  const latRad = (clampedLat * Math.PI) / 180;
+  const y =
+    ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n * TILE_SIZE;
+  return { x, y };
+}
 
 export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
   onFinishWalk,
   onBack,
 }) => {
-  const [userLocation, setUserLocation] = useState<Coordinate>(getSavedLocation);
-  const [locationLabel, setLocationLabel] = useState<string>(getSavedLabel);
-  const [gpsStatus, setGpsStatus] = useState<string>(`Live • ${getSavedLabel()}`);
-  const [isGpsActive, setIsGpsActive] = useState<boolean>(true);
+  const [userLocation, setUserLocation] = useState<Coordinate>(DEFAULT_COORD);
+  const [locationLabel, setLocationLabel] = useState<string>('Koźminek, Poland');
+  const [gpsStatus, setGpsStatus] = useState<string>('Live GPS Active');
   const [isLocating, setIsLocating] = useState<boolean>(false);
 
-  // Search location state
+  // Map viewport & interaction state
+  const [zoom, setZoom] = useState<number>(16);
+  const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({
+    width: 380,
+    height: 480,
+  });
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const panOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Path history for breadcrumb polyline
+  const [pathHistory, setPathHistory] = useState<Coordinate[]>([DEFAULT_COORD]);
+
+  // Search drawer state
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [searchFeedback, setSearchFeedback] = useState<string | null>(null);
 
-  // Walk activity metrics
-  const [distanceKm, setDistanceKm] = useState<number>(0.84);
-  const [seconds, setSeconds] = useState<number>(640); // 10m 40s
-  const [steps, setSteps] = useState<number>(1120);
+  // Walk metrics
+  const [distanceKm, setDistanceKm] = useState<number>(0.42);
+  const [seconds, setSeconds] = useState<number>(315); // ~5m 15s
+  const [steps, setSteps] = useState<number>(580);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isFinished, setIsFinished] = useState<boolean>(false);
   const [selectedFeedback, setSelectedFeedback] = useState<ActivityFeedback | null>(null);
 
   const prevLocationRef = useRef<Coordinate | null>(null);
 
-  const calculateDistance = (coord1: Coordinate, coord2: Coordinate): number => {
-    const toRad = (value: number) => (value * Math.PI) / 180;
+  // Pan gesture handler for smooth map dragging
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          return Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
+        },
+        onPanResponderMove: (_, gestureState) => {
+          const nextX = panOffsetRef.current.x + gestureState.dx;
+          const nextY = panOffsetRef.current.y + gestureState.dy;
+          setPanOffset({ x: nextX, y: nextY });
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          panOffsetRef.current = {
+            x: panOffsetRef.current.x + gestureState.dx,
+            y: panOffsetRef.current.y + gestureState.dy,
+          };
+          setPanOffset({ ...panOffsetRef.current });
+        },
+      }),
+    []
+  );
+
+  const handleRecenter = () => {
+    panOffsetRef.current = { x: 0, y: 0 };
+    setPanOffset({ x: 0, y: 0 });
+  };
+
+  const handleZoomIn = () => {
+    setZoom((prev) => Math.min(prev + 1, 18));
+  };
+
+  const handleZoomOut = () => {
+    setZoom((prev) => Math.max(prev - 1, 13));
+  };
+
+  // Distance helper (Haversine formula in km)
+  const calculateDistance = (c1: Coordinate, c2: Coordinate): number => {
+    const toRad = (v: number) => (v * Math.PI) / 180;
     const R = 6371;
-    const dLat = toRad(coord2.lat - coord1.lat);
-    const dLon = toRad(coord2.lng - coord1.lng);
+    const dLat = toRad(c2.lat - c1.lat);
+    const dLon = toRad(c2.lng - c1.lng);
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(toRad(coord1.lat)) *
-        Math.cos(toRad(coord2.lat)) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
+      Math.cos(toRad(c1.lat)) * Math.cos(toRad(c2.lat)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   };
 
   const saveAndSetLocation = (coord: Coordinate, label?: string) => {
     setUserLocation(coord);
-    setIsGpsActive(true);
+    setPathHistory((prev) => [...prev, coord]);
+
     if (label) {
       setLocationLabel(label);
       setGpsStatus(`Live • ${label}`);
@@ -120,10 +161,9 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
   };
 
   const reverseGeocode = (lat: number, lng: number) => {
-    fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
-      { headers: { 'Accept-Language': 'en' } }
-    )
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, {
+      headers: { 'User-Agent': 'FitTapp-App/1.0', 'Accept-Language': 'en' },
+    })
       .then((res) => res.json())
       .then((data) => {
         if (data && data.address) {
@@ -135,12 +175,11 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
             '';
           const road = data.address.road ? `${data.address.road}, ` : '';
           const label = locality ? `${road}${locality}` : `${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E`;
-          saveAndSetLocation({ lat, lng }, label);
+          setLocationLabel(label);
+          setGpsStatus(`Live • ${label}`);
         }
       })
-      .catch(() => {
-        saveAndSetLocation({ lat, lng });
-      });
+      .catch(() => {});
   };
 
   const detectLiveLocation = () => {
@@ -148,7 +187,6 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
     setGpsStatus('Detecting GPS location...');
 
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      // Tier 1: Fast network / cached position (prevents timeout on laptops/PCs without hardware GPS)
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const current: Coordinate = {
@@ -158,59 +196,17 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
           saveAndSetLocation(current);
           prevLocationRef.current = current;
           setIsLocating(false);
+          handleRecenter();
           reverseGeocode(current.lat, current.lng);
-
-          // Tier 2: Refine with high accuracy in background if hardware GPS is present
-          navigator.geolocation.getCurrentPosition(
-            (refinedPos) => {
-              const refined: Coordinate = {
-                lat: refinedPos.coords.latitude,
-                lng: refinedPos.coords.longitude,
-              };
-              saveAndSetLocation(refined);
-              reverseGeocode(refined.lat, refined.lng);
-            },
-            () => {},
-            { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
-          );
         },
-        (err) => {
-          console.warn('Fast geolocation fix failed, trying network IP:', err.message);
-          detectIpLocation();
+        () => {
+          setIsLocating(false);
         },
-        { enableHighAccuracy: false, timeout: 6000, maximumAge: 300000 }
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
       );
     } else {
-      detectIpLocation();
+      setIsLocating(false);
     }
-  };
-
-  const detectIpLocation = () => {
-    fetch('http://ip-api.com/json/')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.status === 'success' && data.lat && data.lon) {
-          const coord = { lat: data.lat, lng: data.lon };
-          saveAndSetLocation(coord, `${data.city || 'Detected Area'}, ${data.countryCode || 'PL'}`);
-        } else {
-          fallbackIpWhoIs();
-        }
-      })
-      .catch(() => fallbackIpWhoIs())
-      .finally(() => setIsLocating(false));
-  };
-
-  const fallbackIpWhoIs = () => {
-    fetch('https://ipwho.is/')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.success && data.latitude && data.longitude) {
-          const coord = { lat: data.latitude, lng: data.longitude };
-          saveAndSetLocation(coord, `${data.city || 'Detected Area'}, ${data.country_code || 'PL'}`);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setIsLocating(false));
   };
 
   const handleSearchLocation = () => {
@@ -234,13 +230,14 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
           };
           const cleanName = item.display_name.split(',').slice(0, 2).join(',');
           saveAndSetLocation(newCoord, cleanName);
-          setSearchFeedback(`Map centered on: ${cleanName}`);
+          handleRecenter();
+          setSearchFeedback(`Centered on: ${cleanName}`);
           setTimeout(() => {
             setIsSearchOpen(false);
             setSearchFeedback(null);
-          }, 1400);
+          }, 1200);
         } else {
-          setSearchFeedback('Location not found. Try another city or street.');
+          setSearchFeedback('Location not found.');
         }
       })
       .catch(() => {
@@ -254,7 +251,6 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
   useEffect(() => {
     detectLiveLocation();
 
-    // Continuous route watcher
     let watchId: number | null = null;
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       watchId = navigator.geolocation.watchPosition(
@@ -274,8 +270,8 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
           }
           prevLocationRef.current = newPos;
         },
-        (err) => console.warn('WatchPosition error', err),
-        { enableHighAccuracy: false, maximumAge: 4000 }
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 5000 }
       );
     }
 
@@ -286,13 +282,13 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
     };
   }, []);
 
-  // Timer tick
+  // Timer simulation tick during walk
   useEffect(() => {
     if (isPaused || isFinished) return;
 
     const interval = setInterval(() => {
       setSeconds((prev) => prev + 1);
-      setDistanceKm((prev) => +(prev + 0.0015).toFixed(2));
+      setDistanceKm((prev) => +(prev + 0.0014).toFixed(2));
       setSteps((prev) => prev + 2);
     }, 1000);
 
@@ -312,10 +308,70 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
     }, 700);
   };
 
-  // OpenStreetMap Bounding Box and Marker URL
-  const delta = 0.006;
-  const bbox = `${userLocation.lng - delta}%2C${userLocation.lat - delta * 0.7}%2C${userLocation.lng + delta}%2C${userLocation.lat + delta * 0.7}`;
-  const mapEmbedUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${userLocation.lat}%2C${userLocation.lng}`;
+  // Compute map tiles to render around effective center
+  const centerMercator = useMemo(
+    () => latLngToMercator(userLocation.lat, userLocation.lng, zoom),
+    [userLocation, zoom]
+  );
+
+  const effectiveCenter = {
+    x: centerMercator.x - panOffset.x,
+    y: centerMercator.y - panOffset.y,
+  };
+
+  const tiles = useMemo(() => {
+    const { width, height } = containerSize;
+    const maxCoord = 1 << zoom;
+
+    const minTileX = Math.floor((effectiveCenter.x - width / 2) / TILE_SIZE) - 1;
+    const maxTileX = Math.floor((effectiveCenter.x + width / 2) / TILE_SIZE) + 1;
+    const minTileY = Math.floor((effectiveCenter.y - height / 2) / TILE_SIZE) - 1;
+    const maxTileY = Math.floor((effectiveCenter.y + height / 2) / TILE_SIZE) + 1;
+
+    const result: Array<{
+      key: string;
+      url: string;
+      left: number;
+      top: number;
+    }> = [];
+
+    for (let ty = minTileY; ty <= maxTileY; ty++) {
+      if (ty < 0 || ty >= maxCoord) continue;
+      for (let tx = minTileX; tx <= maxTileX; tx++) {
+        const wrappedX = ((tx % maxCoord) + maxCoord) % maxCoord;
+        const left = width / 2 + (tx * TILE_SIZE - effectiveCenter.x);
+        const top = height / 2 + (ty * TILE_SIZE - effectiveCenter.y);
+
+        // CartoDB Dark Matter tiles (high-contrast, dark mode, reliable OSM data)
+        const url = `https://a.basemaps.cartocdn.com/rastertiles/dark_all/${zoom}/${wrappedX}/${ty}.png`;
+        result.push({
+          key: `${zoom}-${tx}-${ty}`,
+          url,
+          left,
+          top,
+        });
+      }
+    }
+    return result;
+  }, [containerSize, effectiveCenter, zoom]);
+
+  // Screen coordinates for user GPS marker
+  const userMarkerPos = {
+    x: containerSize.width / 2 + panOffset.x,
+    y: containerSize.height / 2 + panOffset.y,
+  };
+
+  // SVG Polyline coordinates for walked path
+  const polylinePoints = useMemo(() => {
+    return pathHistory
+      .map((pt) => {
+        const merc = latLngToMercator(pt.lat, pt.lng, zoom);
+        const sx = containerSize.width / 2 + (merc.x - effectiveCenter.x);
+        const sy = containerSize.height / 2 + (merc.y - effectiveCenter.y);
+        return `${sx.toFixed(1)},${sy.toFixed(1)}`;
+      })
+      .join(' ');
+  }, [pathHistory, containerSize, effectiveCenter, zoom]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -328,19 +384,18 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
         </TouchableOpacity>
 
         <View style={styles.topStatusWrap}>
-          <View style={[styles.gpsDot, isGpsActive && styles.gpsDotActive]} />
+          <View style={styles.gpsDotActive} />
           <Text style={styles.gpsStatusText} numberOfLines={1}>
             {gpsStatus}
           </Text>
         </View>
 
-        {/* Header Quick Actions */}
+        {/* Header Actions */}
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={[styles.iconButton, isLocating && styles.iconButtonLoading]}
             activeOpacity={0.7}
             onPress={detectLiveLocation}
-            title="Refresh GPS location"
           >
             <TargetGpsIcon size={16} color={COLORS.primaryMint} />
           </TouchableOpacity>
@@ -349,7 +404,6 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
             style={[styles.iconButton, isSearchOpen && styles.iconButtonActive]}
             activeOpacity={0.7}
             onPress={() => setIsSearchOpen((prev) => !prev)}
-            title="Search custom location"
           >
             <SearchIcon size={16} color={isSearchOpen ? COLORS.primaryMint : COLORS.textSecondary} />
           </TouchableOpacity>
@@ -362,7 +416,7 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
           <View style={styles.searchRow}>
             <TextInput
               style={styles.searchInput}
-              placeholder="Search town, street or city..."
+              placeholder="Search city, town or street..."
               placeholderTextColor={COLORS.textMuted}
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -383,57 +437,94 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
               )}
             </TouchableOpacity>
           </View>
-          {searchFeedback && (
-            <Text style={styles.searchFeedbackText}>{searchFeedback}</Text>
-          )}
+          {searchFeedback && <Text style={styles.searchFeedbackText}>{searchFeedback}</Text>}
         </View>
       )}
 
-      {/* REAL MAP VIEW CONTAINER */}
-      <View style={styles.mapContainer}>
-        {Platform.OS === 'web' ? (
-          <iframe
-            key={`osm-map-${userLocation.lat.toFixed(5)}-${userLocation.lng.toFixed(5)}`}
-            title="Real-time User Location Map"
-            src={mapEmbedUrl}
+      {/* NATIVE INTERACTIVE MAP VIEW */}
+      <View
+        style={styles.mapContainer}
+        onLayout={(e: LayoutChangeEvent) => {
+          const { width, height } = e.nativeEvent.layout;
+          if (width > 0 && height > 0) {
+            setContainerSize({ width, height });
+          }
+        }}
+        {...panResponder.panHandlers}
+      >
+        {/* Render Map Tiles */}
+        {tiles.map((tile) => (
+          <Image
+            key={tile.key}
+            source={{ uri: tile.url }}
             style={{
-              width: '100%',
-              height: '100%',
-              border: 'none',
-              filter: 'invert(90%) hue-rotate(180deg) brightness(85%) contrast(120%)',
+              position: 'absolute',
+              left: tile.left,
+              top: tile.top,
+              width: TILE_SIZE,
+              height: TILE_SIZE,
+              backgroundColor: '#12141C',
             }}
+            resizeMode="cover"
           />
-        ) : (
-          <View style={styles.mapFallback}>
-            <Text style={styles.mapFallbackText}>Real-Time GPS Map Active</Text>
-            <Text style={styles.mapFallbackSub}>
-              {userLocation.lat.toFixed(5)}°N, {userLocation.lng.toFixed(5)}°E
-            </Text>
-          </View>
-        )}
+        ))}
 
-        {/* Live Route Overlay Banner */}
-        <View style={styles.mapFloatingTag}>
-          <WalkIcon size={14} color={COLORS.primaryMint} />
-          <Text style={styles.mapFloatingTagText}>Live Route Tracking • {locationLabel}</Text>
+        {/* Walk Trail Path Overlay */}
+        <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
+          {polylinePoints ? (
+            <Polyline
+              points={polylinePoints}
+              stroke={COLORS.primaryMint}
+              strokeWidth="5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeOpacity="0.85"
+            />
+          ) : null}
+        </Svg>
+
+        {/* User GPS Marker (Beacon) */}
+        <View
+          style={[
+            styles.userMarkerWrapper,
+            {
+              left: userMarkerPos.x - 22,
+              top: userMarkerPos.y - 22,
+            },
+          ]}
+          pointerEvents="none"
+        >
+          <View style={styles.userPulseRing} />
+          <View style={styles.userCenterDot} />
         </View>
 
-        {/* Floating Re-center GPS shortcut */}
-        <TouchableOpacity
-          style={styles.floatingGpsBtn}
-          activeOpacity={0.8}
-          onPress={detectLiveLocation}
-        >
-          <TargetGpsIcon size={18} color={COLORS.primaryMint} />
-          <Text style={styles.floatingGpsText}>Re-center GPS</Text>
-        </TouchableOpacity>
+        {/* Top Info Banner */}
+        <View style={styles.mapFloatingTag} pointerEvents="none">
+          <WalkIcon size={14} color={COLORS.primaryMint} />
+          <Text style={styles.mapFloatingTagText}>Live Route • {locationLabel}</Text>
+        </View>
+
+        {/* Map Floating Controls (+ / - / Re-center) */}
+        <View style={styles.mapControlsColumn}>
+          <TouchableOpacity style={styles.controlPill} activeOpacity={0.8} onPress={handleZoomIn}>
+            <Text style={styles.controlPillText}>+</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.controlPill} activeOpacity={0.8} onPress={handleZoomOut}>
+            <Text style={styles.controlPillText}>−</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.controlPill} activeOpacity={0.8} onPress={handleRecenter}>
+            <TargetGpsIcon size={16} color={COLORS.primaryMint} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* BOTTOM HUD */}
       <View style={styles.bottomHudCard}>
         {!isFinished ? (
           <View>
-            {/* Main Stats Row */}
+            {/* Stats Row */}
             <View style={styles.statsRow}>
               <View style={styles.statBox}>
                 <Text style={styles.statLabel}>DISTANCE</Text>
@@ -464,7 +555,11 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
                 activeOpacity={0.8}
                 onPress={() => setIsPaused((prev) => !prev)}
               >
-                {isPaused ? <PlayIcon size={15} color={COLORS.textPrimary} /> : <PauseIcon size={15} color={COLORS.textPrimary} />}
+                {isPaused ? (
+                  <PlayIcon size={15} color={COLORS.textPrimary} />
+                ) : (
+                  <PauseIcon size={15} color={COLORS.textPrimary} />
+                )}
                 <Text style={styles.pauseButtonText}>{isPaused ? 'Resume' : 'Pause'}</Text>
               </TouchableOpacity>
 
@@ -483,7 +578,7 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
           <View style={styles.completionContainer}>
             <Text style={styles.completionTitle}>How did your walk feel?</Text>
             <Text style={styles.completionSub}>
-              You covered {distanceKm.toFixed(2)} km in {formatTime(seconds)}. Adapting next goal!
+              Covered {distanceKm.toFixed(2)} km in {formatTime(seconds)}. Calibrating next goal!
             </Text>
 
             <View style={styles.adaptiveRow}>
@@ -543,9 +638,7 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
             </View>
 
             <Text style={styles.savedNote}>
-              {selectedFeedback
-                ? 'Saved. Returning to dashboard...'
-                : 'Tap once to complete.'}
+              {selectedFeedback ? 'Saved. Returning to app...' : 'Tap once to complete.'}
             </Text>
           </View>
         )}
@@ -591,13 +684,10 @@ const styles = StyleSheet.create({
     gap: 6,
     marginHorizontal: 10,
   },
-  gpsDot: {
+  gpsDotActive: {
     width: 7,
     height: 7,
     borderRadius: 3.5,
-    backgroundColor: COLORS.amberWarm,
-  },
-  gpsDotActive: {
     backgroundColor: COLORS.primaryMint,
   },
   gpsStatusText: {
@@ -677,26 +767,9 @@ const styles = StyleSheet.create({
   },
   mapContainer: {
     flex: 1,
-    backgroundColor: '#12141C',
+    backgroundColor: '#0F1117',
     position: 'relative',
     overflow: 'hidden',
-  },
-  mapFallback: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  mapFallbackText: {
-    fontFamily: FONTS.sans,
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.primaryMint,
-  },
-  mapFallbackSub: {
-    fontFamily: FONTS.mono,
-    fontSize: 12,
-    color: COLORS.textMuted,
-    marginTop: 4,
   },
   mapFloatingTag: {
     position: 'absolute',
@@ -718,29 +791,55 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.primaryMint,
   },
-  floatingGpsBtn: {
+  mapControlsColumn: {
     position: 'absolute',
-    bottom: 16,
-    right: 16,
-    backgroundColor: 'rgba(20, 22, 31, 0.92)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: RADII.pill,
-    borderWidth: 1,
-    borderColor: COLORS.primaryMint,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
+    right: 14,
+    top: 60,
+    gap: 8,
   },
-  floatingGpsText: {
-    fontFamily: FONTS.sans,
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.primaryMint,
+  controlPill: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(20, 22, 31, 0.92)',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  controlPillText: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.mono,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  userMarkerWrapper: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  userPulseRing: {
+    position: 'absolute',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(52, 211, 153, 0.22)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(52, 211, 153, 0.65)',
+  },
+  userCenterDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: COLORS.primaryMint,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   bottomHudCard: {
     backgroundColor: COLORS.surfaceCard,

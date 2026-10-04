@@ -178,6 +178,66 @@ export async function sendRealPushNotification(options: {
 }
 
 /**
+ * Helper to fire a Walk or Stretch notification based on weather
+ */
+export async function sendMovementNotification(options: {
+  isRaining: boolean;
+  temperatureC?: number;
+  description?: string;
+}): Promise<string | null> {
+  const isRain = options.isRaining;
+  const temp = options.temperatureC ?? 14;
+  const desc = options.description ?? (isRain ? 'Light Rain' : 'Clear sky');
+
+  return sendRealPushNotification({
+    title: isRain ? `FitTapp • ${desc} (${temp}°C)` : `FitTapp • ${desc} (${temp}°C)`,
+    body: isRain
+      ? "Weather isn't ideal for a walk. Take 2 minutes for a gentle neck & shoulder stretch at your desk."
+      : 'A perfect moment to rest your eyes. Take a 15-minute breath-of-fresh-air walk around the park.',
+    categoryIdentifier: isRain
+      ? NOTIFICATION_CATEGORIES.MOVEMENT_STRETCH
+      : NOTIFICATION_CATEGORIES.MOVEMENT_WALK,
+    data: { type: isRain ? 'stretch' : 'walk' },
+  });
+}
+
+/**
+ * Helper to fire a Hydration notification
+ */
+export async function sendHydrationNotification(): Promise<string | null> {
+  return sendRealPushNotification({
+    title: 'FitTapp • Hydration Check',
+    body: 'Time for 250ml of fresh water to keep your focus sharp and steady.',
+    categoryIdentifier: NOTIFICATION_CATEGORIES.WATER,
+    data: { type: 'water' },
+  });
+}
+
+/**
+ * Helper to fire a Sleep check-in notification
+ */
+export async function sendSleepNotification(): Promise<string | null> {
+  return sendRealPushNotification({
+    title: 'FitTapp • Good Morning',
+    body: 'How did you rest tonight? One tap to log your morning sleep quality.',
+    categoryIdentifier: NOTIFICATION_CATEGORIES.SLEEP,
+    data: { type: 'sleep' },
+  });
+}
+
+/**
+ * Helper to fire a Mood reflection notification
+ */
+export async function sendMoodNotification(): Promise<string | null> {
+  return sendRealPushNotification({
+    title: 'FitTapp • Evening Reflection',
+    body: 'How is your energy right now? Tap a feeling to close out your day.',
+    categoryIdentifier: NOTIFICATION_CATEGORIES.MOOD,
+    data: { type: 'mood' },
+  });
+}
+
+/**
  * Sets up a listener for lock screen button clicks
  */
 export function setupNotificationResponseListener(
@@ -185,9 +245,33 @@ export function setupNotificationResponseListener(
 ) {
   const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
     const actionIdentifier = response.actionIdentifier;
-    const category = response.notification.request.content.categoryIdentifier || '';
+    const category = (response.notification.request.content as any).categoryIdentifier || '';
     const data = response.notification.request.content.data;
     onAction(actionIdentifier, category, data);
   });
   return subscription;
+}
+
+/**
+ * Checks if the app was launched by tapping a notification on cold start
+ */
+export async function checkColdStartNotificationResponse(): Promise<{
+  actionIdentifier: string;
+  category: string;
+  data: any;
+} | null> {
+  if (Platform.OS === 'web') return null;
+  try {
+    const response = await Notifications.getLastNotificationResponseAsync();
+    if (response) {
+      return {
+        actionIdentifier: response.actionIdentifier,
+        category: (response.notification.request.content as any).categoryIdentifier || '',
+        data: response.notification.request.content.data,
+      };
+    }
+  } catch (e) {
+    console.warn('Error reading cold start notification response:', e);
+  }
+  return null;
 }

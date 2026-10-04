@@ -2,24 +2,17 @@ import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   View,
-  Text,
-  TouchableOpacity,
   SafeAreaView,
   StatusBar,
-  ScrollView,
   Platform,
   ActivityIndicator,
 } from 'react-native';
-import { LockScreenNotification } from './src/components/LockScreenNotification';
-import { LiveActivityWidget } from './src/components/LiveActivityWidget';
-import { WalkActivityWidget } from './src/components/WalkActivityWidget';
 import { ActiveWalkMapScreen } from './src/components/ActiveWalkMapScreen';
-import { NotificationShowcase } from './src/components/NotificationShowcase';
 import { MinimalistDashboard } from './src/components/MinimalistDashboard';
 import { ProgressScreen } from './src/components/ProgressScreen';
 import { SettingsScreen } from './src/components/SettingsScreen';
 import { OnboardingScreen } from './src/components/OnboardingScreen';
-import { COLORS, RADII, SPACING, FONTS } from './src/theme/theme';
+import { COLORS } from './src/theme/theme';
 import { ActivityFeedback, ActivityType, AppStateData } from './src/types';
 import { fetchLiveWeather } from './src/services/weatherService';
 import {
@@ -33,22 +26,21 @@ import {
 import {
   registerNotificationCategories,
   requestNotificationPermissions,
-  sendRealPushNotification,
   setupNotificationResponseListener,
+  checkColdStartNotificationResponse,
+  sendMovementNotification,
+  sendHydrationNotification,
+  sendSleepNotification,
+  sendMoodNotification,
   NOTIFICATION_CATEGORIES,
 } from './src/services/notificationService';
 
-type ScreenRoute =
-  | 'push'
-  | 'activity_stretch'
-  | 'activity_walk'
-  | 'walk_map'
-  | 'all_notifications'
-  | 'app';
+type ScreenRoute = 'app' | 'walk_map';
 
 export default function App() {
   const [isOnboarded, setIsOnboarded] = useState<boolean | null>(null);
-  const [currentRoute, setCurrentRoute] = useState<ScreenRoute>('push');
+  // Default to main in-app screen
+  const [currentRoute, setCurrentRoute] = useState<ScreenRoute>('app');
   const [activeTab, setActiveTab] = useState<'today' | 'progress' | 'settings'>('today');
 
   // Global State for FitTapp
@@ -130,7 +122,7 @@ export default function App() {
       await requestNotificationPermissions();
 
       // 5. Setup Action Click Listener from Lock-Screen Push Notifications
-      sub = setupNotificationResponseListener((actionId) => {
+      sub = setupNotificationResponseListener((actionId, category) => {
         if (actionId === 'ACTION_DRINK_250') {
           logHabitEvent({
             category: 'water',
@@ -142,10 +134,23 @@ export default function App() {
             source: 'lock_push',
           });
           setAppState((prev) => ({ ...prev, waterMl: prev.waterMl + 250 }));
-        } else if (actionId === 'ACTION_START_WALK') {
+        } else if (
+          actionId === 'ACTION_START_WALK' ||
+          (category === NOTIFICATION_CATEGORIES.MOVEMENT_WALK && actionId.includes('DEFAULT'))
+        ) {
+          // Open Live Walk Map directly from lock-screen notification!
           setCurrentRoute('walk_map');
         } else if (actionId === 'ACTION_START_STRETCH') {
-          setCurrentRoute('activity_stretch');
+          logHabitEvent({
+            category: 'movement',
+            value_num: 2.0,
+            value_text: 'stretch',
+            feedback: 'just_right',
+            weather_condition: 'rain',
+            temperature_c: null,
+            source: 'lock_push',
+          });
+          setAppState((prev) => ({ ...prev, movementDone: true, movementType: 'stretch' }));
         } else if (actionId.startsWith('ACTION_SLEEP_')) {
           const quality = actionId.replace('ACTION_SLEEP_', '');
           logHabitEvent({
@@ -172,6 +177,17 @@ export default function App() {
           setAppState((prev) => ({ ...prev, moodLogged: mood }));
         }
       });
+
+      // 6. Check if app was cold-launched by tapping a Walk notification
+      const coldStartResponse = await checkColdStartNotificationResponse();
+      if (coldStartResponse) {
+        if (
+          coldStartResponse.actionIdentifier === 'ACTION_START_WALK' ||
+          coldStartResponse.category === NOTIFICATION_CATEGORIES.MOVEMENT_WALK
+        ) {
+          setCurrentRoute('walk_map');
+        }
+      }
     };
 
     startup();
@@ -301,26 +317,6 @@ export default function App() {
     });
   };
 
-  const toggleWeatherContext = () => {
-    setAppState((prev) => ({
-      ...prev,
-      weather: prev.weather === 'rain' ? 'sunny' : 'rain',
-    }));
-  };
-
-  const handleAcceptPush = () => {
-    if (appState.weather === 'rain') {
-      setCurrentRoute('activity_stretch');
-    } else {
-      setCurrentRoute('walk_map');
-    }
-  };
-
-  const handleDismissPush = () => {
-    setCurrentRoute('app');
-    setActiveTab('today');
-  };
-
   const handleFinishActivity = (feedback: ActivityFeedback, type: 'stretch' | 'walk') => {
     logHabitEvent({
       category: 'movement',
@@ -345,11 +341,26 @@ export default function App() {
     if (type === 'walk') {
       setCurrentRoute('walk_map');
     } else {
-      setCurrentRoute('activity_stretch');
+      // Desk stretch
+      logHabitEvent({
+        category: 'movement',
+        value_num: 2.0,
+        value_text: 'stretch',
+        feedback: 'just_right',
+        weather_condition: appState.weather,
+        temperature_c: appState.weatherDetails?.temperatureC ?? null,
+        source: 'in_app',
+      });
+      handleUpdateState((prev) => ({
+        ...prev,
+        movementDone: true,
+        movementType: 'stretch',
+      }));
     }
   };
 
-  const handleTriggerTestPush = async () => {
+  // Triggers real system lock-screen notification
+  const handleTriggerTestPush = async (type: 'walk' | 'water' | 'sleep' | 'mood' = 'walk') => {
     if (appState.attentionBudgetUsed < appState.attentionBudgetTotal) {
       await incrementAttentionBudget();
 
@@ -359,20 +370,20 @@ export default function App() {
       }));
 
       // Fire a REAL native system push notification to lock screen!
-      const isRain = appState.weather === 'rain';
-      await sendRealPushNotification({
-        title: isRain
-          ? `FitTapp • ${appState.weatherDetails?.description || 'Rain'} (${appState.weatherDetails?.temperatureC ?? 12}°C)`
-          : `FitTapp • ${appState.weatherDetails?.description || 'Clear sky'} (${appState.weatherDetails?.temperatureC ?? 13}°C)`,
-        body: isRain
-          ? "Weather isn't ideal for a walk. Take 2 minutes for a gentle neck & shoulder stretch at your desk."
-          : 'A perfect moment to rest your eyes. Take a 15-minute breath-of-fresh-air walk around the park.',
-        categoryIdentifier: isRain
-          ? NOTIFICATION_CATEGORIES.MOVEMENT_STRETCH
-          : NOTIFICATION_CATEGORIES.MOVEMENT_WALK,
-      });
-
-      setCurrentRoute('push');
+      if (type === 'walk') {
+        const isRain = appState.weather === 'rain';
+        await sendMovementNotification({
+          isRaining: isRain,
+          temperatureC: appState.weatherDetails?.temperatureC,
+          description: appState.weatherDetails?.description,
+        });
+      } else if (type === 'water') {
+        await sendHydrationNotification();
+      } else if (type === 'sleep') {
+        await sendSleepNotification();
+      } else if (type === 'mood') {
+        await sendMoodNotification();
+      }
     }
   };
 
@@ -402,220 +413,47 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
 
       <View style={styles.phoneFrame}>
-        {/* Top Switcher Bar */}
-        <View style={styles.topSwitcherContainer}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.topSwitcherScroll}
-          >
-            <TouchableOpacity
-              style={[
-                styles.switcherTab,
-                currentRoute === 'push' && styles.switcherTabActive,
-              ]}
-              activeOpacity={0.8}
-              onPress={() => setCurrentRoute('push')}
-            >
-              <Text
-                style={[
-                  styles.switcherText,
-                  currentRoute === 'push' && styles.switcherTextActive,
-                ]}
-              >
-                1. Push Preview ({appState.weather === 'rain' ? 'Rain' : 'Sun'})
-              </Text>
-            </TouchableOpacity>
+        {/* ROUTE 1: In-App Live GPS Map Screen (Opened only when starting a walk or via notification) */}
+        {currentRoute === 'walk_map' && (
+          <ActiveWalkMapScreen
+            onFinishWalk={(feedback) => handleFinishActivity(feedback, 'walk')}
+            onBack={() => {
+              setCurrentRoute('app');
+              setActiveTab('today');
+            }}
+          />
+        )}
 
-            <TouchableOpacity
-              style={[
-                styles.switcherTab,
-                currentRoute === 'activity_stretch' && styles.switcherTabActive,
-              ]}
-              activeOpacity={0.8}
-              onPress={() => setCurrentRoute('activity_stretch')}
-            >
-              <Text
-                style={[
-                  styles.switcherText,
-                  currentRoute === 'activity_stretch' && styles.switcherTextActive,
-                ]}
-              >
-                2. Live Stretch
-              </Text>
-            </TouchableOpacity>
+        {/* ROUTE 2: Main In-App Interface (Today, Progress, Settings) */}
+        {currentRoute === 'app' && (
+          <View style={styles.appContainer}>
+            {activeTab === 'today' && (
+              <MinimalistDashboard
+                appState={appState}
+                onUpdateState={handleUpdateState}
+                onStartActivity={handleStartActivity}
+                activeTab={activeTab}
+                onTabChange={(tab) => setActiveTab(tab)}
+              />
+            )}
 
-            <TouchableOpacity
-              style={[
-                styles.switcherTab,
-                currentRoute === 'walk_map' && styles.switcherTabActive,
-              ]}
-              activeOpacity={0.8}
-              onPress={() => setCurrentRoute('walk_map')}
-            >
-              <Text
-                style={[
-                  styles.switcherText,
-                  currentRoute === 'walk_map' && styles.switcherTextActive,
-                ]}
-              >
-                3. Live Walk Map
-              </Text>
-            </TouchableOpacity>
+            {activeTab === 'progress' && (
+              <ProgressScreen
+                appState={appState}
+                onTabChange={(tab) => setActiveTab(tab)}
+              />
+            )}
 
-            <TouchableOpacity
-              style={[
-                styles.switcherTab,
-                currentRoute === 'all_notifications' && styles.switcherTabActive,
-              ]}
-              activeOpacity={0.8}
-              onPress={() => setCurrentRoute('all_notifications')}
-            >
-              <Text
-                style={[
-                  styles.switcherText,
-                  currentRoute === 'all_notifications' && styles.switcherTextActive,
-                ]}
-              >
-                4. All 5 Push Types
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.switcherTab,
-                currentRoute === 'activity_walk' && styles.switcherTabActive,
-              ]}
-              activeOpacity={0.8}
-              onPress={() => setCurrentRoute('activity_walk')}
-            >
-              <Text
-                style={[
-                  styles.switcherText,
-                  currentRoute === 'activity_walk' && styles.switcherTextActive,
-                ]}
-              >
-                5. Lock Walk Widget
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.switcherTab,
-                currentRoute === 'app' && styles.switcherTabActive,
-              ]}
-              activeOpacity={0.8}
-              onPress={() => setCurrentRoute('app')}
-            >
-              <Text
-                style={[
-                  styles.switcherText,
-                  currentRoute === 'app' && styles.switcherTextActive,
-                ]}
-              >
-                6. In-App ({activeTab})
-              </Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-
-        {/* View Router */}
-        <View style={styles.screenContent}>
-          {/* ROUTE 1: Rich Push Notification on Lock Screen */}
-          {currentRoute === 'push' && (
-            <LockScreenNotification
-              appName="FitTapp"
-              timeAgo="now"
-              weather={appState.weather}
-              temperatureC={appState.weatherDetails?.temperatureC}
-              weatherLabel={appState.weatherDetails?.description}
-              budgetUsed={appState.attentionBudgetUsed}
-              budgetTotal={appState.attentionBudgetTotal}
-              onAccept={handleAcceptPush}
-              onDismiss={handleDismissPush}
-              onToggleWeather={toggleWeatherContext}
-            />
-          )}
-
-          {/* ROUTE 2: In-App Real GPS Map Walk Screen */}
-          {currentRoute === 'walk_map' && (
-            <ActiveWalkMapScreen
-              onFinishWalk={(feedback) => handleFinishActivity(feedback, 'walk')}
-              onBack={() => {
-                setCurrentRoute('app');
-                setActiveTab('today');
-              }}
-            />
-          )}
-
-          {/* ROUTE 3: All 5 Actionable Notification Types Showcase */}
-          {currentRoute === 'all_notifications' && (
-            <NotificationShowcase
-              appState={appState}
-              onUpdateState={handleUpdateState}
-              onLaunchWalk={() => setCurrentRoute('walk_map')}
-              onLaunchStretch={() => setCurrentRoute('activity_stretch')}
-              onBack={() => {
-                setCurrentRoute('app');
-                setActiveTab('today');
-              }}
-            />
-          )}
-
-          {/* ROUTE 4: Live Activity - Walk Widget */}
-          {currentRoute === 'activity_walk' && (
-            <WalkActivityWidget
-              targetDistanceKm={1.5}
-              activityTitle="Outdoor Reset Walk"
-              onOpenMap={() => setCurrentRoute('walk_map')}
-              onFinish={(feedback) => handleFinishActivity(feedback, 'walk')}
-            />
-          )}
-
-          {/* ROUTE 5: Live Activity - Desk Stretch Widget */}
-          {currentRoute === 'activity_stretch' && (
-            <LiveActivityWidget
-              initialSeconds={120}
-              activityTitle="Desk Stretch (Rainy Context)"
-              activitySubtitle="Neck & shoulder tension release"
-              onFinish={(feedback) => handleFinishActivity(feedback, 'stretch')}
-              onClose={() => {
-                setCurrentRoute('app');
-                setActiveTab('today');
-              }}
-            />
-          )}
-
-          {/* ROUTE 6: Main In-App Interface */}
-          {currentRoute === 'app' && (
-            <View style={styles.appContainer}>
-              {activeTab === 'today' && (
-                <MinimalistDashboard
-                  appState={appState}
-                  onUpdateState={handleUpdateState}
-                  onStartActivity={handleStartActivity}
-                  onTabChange={(tab) => setActiveTab(tab)}
-                />
-              )}
-
-              {activeTab === 'progress' && (
-                <ProgressScreen
-                  appState={appState}
-                  onTabChange={(tab) => setActiveTab(tab)}
-                />
-              )}
-
-              {activeTab === 'settings' && (
-                <SettingsScreen
-                  appState={appState}
-                  onUpdateState={handleUpdateState}
-                  onTabChange={(tab) => setActiveTab(tab)}
-                  onTriggerNotification={handleTriggerTestPush}
-                />
-              )}
-            </View>
-          )}
-        </View>
+            {activeTab === 'settings' && (
+              <SettingsScreen
+                appState={appState}
+                onUpdateState={handleUpdateState}
+                onTabChange={(tab) => setActiveTab(tab)}
+                onTriggerNotification={handleTriggerTestPush}
+              />
+            )}
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -639,41 +477,6 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     backgroundColor: COLORS.background,
     overflow: 'hidden',
-  },
-  topSwitcherContainer: {
-    backgroundColor: '#0F1118',
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    paddingVertical: 8,
-  },
-  topSwitcherScroll: {
-    paddingHorizontal: 12,
-    gap: 6,
-  },
-  switcherTab: {
-    paddingHorizontal: 11,
-    paddingVertical: 5,
-    borderRadius: RADII.pill,
-    backgroundColor: COLORS.surfaceElevated,
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-  switcherTabActive: {
-    backgroundColor: 'rgba(52, 211, 153, 0.12)',
-    borderColor: COLORS.primaryMint,
-  },
-  switcherText: {
-    fontFamily: FONTS.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: COLORS.textMuted,
-  },
-  switcherTextActive: {
-    color: COLORS.primaryMint,
-    fontWeight: '700',
-  },
-  screenContent: {
-    flex: 1,
   },
   appContainer: {
     flex: 1,

@@ -82,8 +82,8 @@ export interface MinimalistDashboardProps {
   appState: AppStateData;
   onUpdateState: (updater: Partial<AppStateData> | ((prev: AppStateData) => AppStateData)) => void;
   onStartActivity: (type: ActivityType) => void;
-  onSimulatePush: () => void;
-  activeTab: 'today' | 'progress' | 'settings';
+  onSimulatePush?: () => void;
+  activeTab?: 'today' | 'progress' | 'settings';
   onTabChange: (tab: 'today' | 'progress' | 'settings') => void;
 }
 
@@ -96,5 +96,5 @@ export interface SettingsScreenProps {
   appState: AppStateData;
   onUpdateState: (updater: Partial<AppStateData> | ((prev: AppStateData) => AppStateData)) => void;
   onTabChange: (tab: 'today' | 'progress' | 'settings') => void;
-  onTriggerNotification: () => void;
+  onTriggerNotification: (type?: 'walk' | 'water' | 'sleep' | 'mood') => void;
 }

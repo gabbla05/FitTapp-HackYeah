@@ -7,5 +7,5 @@ export { MinimalistDashboard } from './components/MinimalistDashboard';
 export { ProgressScreen } from './components/ProgressScreen';
 export { SettingsScreen } from './components/SettingsScreen';
 export { WaveChart } from './components/WaveChart';
-export { COLORS, RADII, SPACING, TYPOGRAPHY } from './theme/theme';
+export { COLORS, RADII, SPACING, FONTS } from './theme/theme';
 export * from './types';
