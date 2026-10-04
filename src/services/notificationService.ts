@@ -89,22 +89,22 @@ export async function registerNotificationCategories(): Promise<void> {
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.SLEEP, [
       {
         identifier: 'ACTION_SLEEP_RESTED',
-        buttonTitle: 'Rested',
+        buttonTitle: 'Rested (8h)',
         options: { opensAppToForeground: false },
       },
       {
         identifier: 'ACTION_SLEEP_MODERATE',
-        buttonTitle: 'Moderate',
+        buttonTitle: 'Moderate (6.5h)',
         options: { opensAppToForeground: false },
       },
       {
-        identifier: 'ACTION_SLEEP_FATIGUED',
-        buttonTitle: 'Fatigued',
+        identifier: 'ACTION_SLEEP_TIRED',
+        buttonTitle: 'Tired (5h)',
         options: { opensAppToForeground: false },
       },
     ]);
 
-    // 5. Mood (Silent background action)
+    // 5. Mood (Silent background action: Calm, Flow, Tired)
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.MOOD, [
       {
         identifier: 'ACTION_MOOD_CALM',
@@ -117,8 +117,8 @@ export async function registerNotificationCategories(): Promise<void> {
         options: { opensAppToForeground: false },
       },
       {
-        identifier: 'ACTION_MOOD_TENSE',
-        buttonTitle: 'Tense',
+        identifier: 'ACTION_MOOD_TIRED',
+        buttonTitle: 'Tired',
         options: { opensAppToForeground: false },
       },
     ]);

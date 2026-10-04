@@ -94,6 +94,15 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
   const [isFinished, setIsFinished] = useState<boolean>(false);
   const [selectedFeedback, setSelectedFeedback] = useState<ActivityFeedback | null>(null);
 
+  const isPausedRef = useRef<boolean>(false);
+  const isFinishedRef = useRef<boolean>(false);
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
+  useEffect(() => {
+    isFinishedRef.current = isFinished;
+  }, [isFinished]);
+
   const prevLocationRef = useRef<Coordinate | null>(null);
 
   // Pan gesture handler for smooth map dragging
@@ -332,22 +341,41 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
         watchSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
-            timeInterval: 2000,
-            distanceInterval: 5,
+            timeInterval: 2500,
+            distanceInterval: 6,
           },
           (location) => {
             if (!isMounted) return;
+            if (isPausedRef.current || isFinishedRef.current) return;
+
             const newPos: Coordinate = {
               lat: location.coords.latitude,
               lng: location.coords.longitude,
             };
 
+            const speed = location.coords.speed;
+            const accuracy = location.coords.accuracy ?? 15;
+
+            // 1. Reject low-confidence indoor satellite bouncing (accuracy circle > 22 meters)
+            if (accuracy > 22) {
+              return;
+            }
+
+            // 2. Reject stationary jitter if speed is reported and under walking pace (< 0.6 m/s)
+            if (speed !== null && speed < 0.6) {
+              return;
+            }
+
             if (prevLocationRef.current) {
-              const addedDist = calculateDistance(prevLocationRef.current, newPos);
-              // Require at least 8 meters of real movement to filter GPS jitter while sitting still
-              if (addedDist >= 0.008 && addedDist < 0.3) {
-                setDistanceKm((prev) => +(prev + addedDist).toFixed(2));
-                setSteps((prev) => prev + Math.round(addedDist * 1350));
+              const addedDistKm = calculateDistance(prevLocationRef.current, newPos);
+              const distMeters = addedDistKm * 1000;
+
+              // 3. Movement must exceed minimum 15m and 75% of accuracy uncertainty circle
+              const minThresholdMeters = Math.max(15, accuracy * 0.75);
+
+              if (distMeters >= minThresholdMeters && distMeters < 200) {
+                setDistanceKm((prev) => +(prev + addedDistKm).toFixed(2));
+                setSteps((prev) => prev + Math.round(distMeters * 1.35));
                 setUserLocation(newPos);
                 setPathHistory((prev) => [...prev, newPos]);
                 prevLocationRef.current = newPos;

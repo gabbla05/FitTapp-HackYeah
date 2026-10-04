@@ -337,60 +337,122 @@ export async function getAttentionBudgetStatus(): Promise<{
 }
 
 /**
- * Calculates dynamic weekly rhythm: only marks days as completed if real events exist
+ * Resets today's attention budget usage back to 0
  */
-export async function getWeeklyRitualDays(): Promise<
-  Array<{ dayName: string; completed: boolean; isToday?: boolean }>
-> {
+export async function resetAttentionBudget(): Promise<void> {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (nativeDb) {
+    try {
+      await nativeDb.runAsync(
+        `INSERT INTO attention_budget_logs (date, pushed_count, daily_cap)
+         VALUES (?, 0, 3)
+         ON CONFLICT(date) DO UPDATE SET pushed_count = 0`,
+        [todayStr]
+      );
+    } catch (e) {
+      console.warn('Error resetting budget in SQLite:', e);
+    }
+  }
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(
+        `fittapp_budget_${todayStr}`,
+        JSON.stringify({ pushedCount: 0, dailyCap: 3 })
+      );
+    } catch {}
+  }
+}
+
+/**
+ * Calculates dynamic weekly rhythm with optional weekOffset (0 = current week, -1 = last week, etc.)
+ */
+export async function getWeeklyRitualDays(weekOffset: number = 0): Promise<{
+  days: Array<{ dayName: string; completed: boolean; isToday?: boolean }>;
+  weekLabel: string;
+  hasPreviousWeekData: boolean;
+}> {
   const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const now = new Date();
-  const todayIdx = (now.getDay() + 6) % 7; // Monday = 0, Sunday = 6
+  const currentTodayIdx = (now.getDay() + 6) % 7; // Monday = 0, Sunday = 6
 
-  // Monday of the current week at 00:00:00
+  // Target week's Monday at 00:00:00
   const monday = new Date(now);
-  monday.setDate(now.getDate() - todayIdx);
+  monday.setDate(now.getDate() - currentTodayIdx + weekOffset * 7);
   monday.setHours(0, 0, 0, 0);
 
-  const activeDaysSet = new Set<number>();
+  // Target week's Sunday at 23:59:59.999
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
 
-  let events: HabitEventRecord[] = [];
+  const mondayIso = monday.toISOString();
+  const sundayIso = sunday.toISOString();
+
+  let targetEvents: HabitEventRecord[] = [];
+  let olderEventsCount = 0;
+
   if (nativeDb) {
     try {
       const rows: any = await nativeDb.getAllAsync(
-        `SELECT created_at FROM habit_events WHERE created_at >= ?`,
-        [monday.toISOString()]
+        `SELECT created_at FROM habit_events WHERE created_at >= ? AND created_at <= ?`,
+        [mondayIso, sundayIso]
       );
-      events = rows || [];
+      targetEvents = rows || [];
+
+      const older: any = await nativeDb.getFirstAsync(
+        `SELECT COUNT(*) as count FROM habit_events WHERE created_at < ?`,
+        [mondayIso]
+      );
+      olderEventsCount = older?.count || 0;
     } catch (e) {
       console.warn('Error fetching weekly events from SQLite:', e);
     }
   }
 
-  if (events.length === 0 && typeof window !== 'undefined' && window.localStorage) {
+  if (targetEvents.length === 0 && typeof window !== 'undefined' && window.localStorage) {
     try {
       const raw = window.localStorage.getItem('fittapp_db_events');
       if (raw) {
         const all: HabitEventRecord[] = JSON.parse(raw);
-        events = all.filter((e) => new Date(e.created_at) >= monday);
+        targetEvents = all.filter((e) => {
+          const t = new Date(e.created_at).getTime();
+          return t >= monday.getTime() && t <= sunday.getTime();
+        });
+        olderEventsCount = all.filter((e) => new Date(e.created_at).getTime() < monday.getTime()).length;
       }
     } catch {}
   }
 
-  for (const ev of events) {
+  const activeDaysSet = new Set<number>();
+  for (const ev of targetEvents) {
     const d = new Date(ev.created_at);
     const dayIdx = (d.getDay() + 6) % 7;
     activeDaysSet.add(dayIdx);
   }
 
-  return dayNames.map((name, idx) => ({
+  // Format week label
+  let weekLabel = 'This Week';
+  if (weekOffset === -1) {
+    weekLabel = 'Last Week';
+  } else if (weekOffset < -1) {
+    weekLabel = `${Math.abs(weekOffset)} weeks ago`;
+  }
+
+  const days = dayNames.map((name, idx) => ({
     dayName: name,
     completed: activeDaysSet.has(idx),
-    isToday: idx === todayIdx,
+    isToday: weekOffset === 0 && idx === currentTodayIdx,
   }));
+
+  return {
+    days,
+    weekLabel,
+    hasPreviousWeekData: olderEventsCount > 0,
+  };
 }
 
 /**
- * Calculates real consecutive streak weeks from SQLite records (starts at 0 for fresh app)
+ * Calculates real consecutive active weeks using ISO 8601 standard
  */
 export async function getRealStreakWeeks(): Promise<number> {
   let events: { created_at: string }[] = [];
@@ -411,17 +473,42 @@ export async function getRealStreakWeeks(): Promise<number> {
 
   if (events.length === 0) return 0;
 
-  const weekSet = new Set<string>();
+  // Helper for ISO 8601 week: YYYY-Www (Monday start, Sunday end)
+  const getIsoWeek = (d: Date): string => {
+    const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const dayNum = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+  };
+
+  const currentIsoWeek = getIsoWeek(new Date());
+  const activeWeeks = new Set<string>();
+
   for (const ev of events) {
-    const d = new Date(ev.created_at);
-    const year = d.getFullYear();
-    const oneJan = new Date(d.getFullYear(), 0, 1);
-    const numberOfDays = Math.floor((d.getTime() - oneJan.getTime()) / (24 * 60 * 60 * 1000));
-    const week = Math.ceil((d.getDay() + 1 + numberOfDays) / 7);
-    weekSet.add(`${year}-${week}`);
+    activeWeeks.add(getIsoWeek(new Date(ev.created_at)));
   }
 
-  return weekSet.size;
+  // If no activity in current week, streak is 0
+  if (!activeWeeks.has(currentIsoWeek)) {
+    return 0;
+  }
+
+  // Count consecutive weeks backwards from current
+  let streak = 1;
+  let checkDate = new Date();
+  while (true) {
+    checkDate.setDate(checkDate.getDate() - 7);
+    const prevWeek = getIsoWeek(checkDate);
+    if (activeWeeks.has(prevWeek)) {
+      streak += 1;
+    } else {
+      break;
+    }
+  }
+
+  return streak;
 }
 
 /**

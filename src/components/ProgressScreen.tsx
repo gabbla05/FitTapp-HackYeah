@@ -6,7 +6,16 @@ import { CheckIcon, SparkleIcon, TabTodayIcon, TabProgressIcon, TabSettingsIcon,
 import { getZeroUiStats, getWeeklyRitualDays } from '../database/storageService';
 
 export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabChange }) => {
-  const [weeklyDays, setWeeklyDays] = useState<DayRitual[]>([]);
+  const [weekOffset, setWeekOffset] = useState<number>(0);
+  const [weeklyData, setWeeklyData] = useState<{
+    days: DayRitual[];
+    weekLabel: string;
+    hasPreviousWeekData: boolean;
+  }>({
+    days: [],
+    weekLabel: 'This Week',
+    hasPreviousWeekData: false,
+  });
   const today = new Date();
   const todayIndex = (today.getDay() + 6) % 7;
   const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -27,9 +36,9 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabC
   });
 
   useEffect(() => {
-    getWeeklyRitualDays().then(setWeeklyDays);
+    getWeeklyRitualDays(weekOffset).then(setWeeklyData);
     getZeroUiStats().then(setZeroUiStats);
-  }, [appState.waterMl, appState.movementDone, appState.sleepQuality, appState.moodLogged]);
+  }, [weekOffset, appState.waterMl, appState.movementDone, appState.sleepQuality, appState.moodLogged]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -52,18 +61,46 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabC
         {/* 1. Card: 7-Day Weekly Rhythm */}
         <View style={styles.card}>
           <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>Weekly Rhythm</Text>
+            <View>
+              <Text style={styles.cardTitle}>Weekly Rhythm</Text>
+              <Text style={styles.weekSubTitle}>{weeklyData.weekLabel}</Text>
+            </View>
             <View style={styles.streakBadge}>
-              <Text style={styles.streakBadgeText}>Streak: {appState.streakWeeks} weeks</Text>
+              <Text style={styles.streakBadgeText}>
+                Streak: {appState.streakWeeks} {appState.streakWeeks === 1 ? 'week' : 'weeks'}
+              </Text>
             </View>
           </View>
           <Text style={styles.cardDescription}>
-            We count whole weeks, not fragile single days. Today is {dayNames[todayIndex]}. One missed day never resets your streak.
+            We count whole weeks, not fragile single days. {weekOffset === 0 ? `Today is ${dayNames[todayIndex]}. One missed day never resets your streak.` : `Viewing activity for ${weeklyData.weekLabel}.`}
           </Text>
+
+          {/* Navigation for Previous / Next Weeks */}
+          <View style={styles.weekNavRow}>
+            <TouchableOpacity
+              style={[styles.weekNavBtn, !weeklyData.hasPreviousWeekData && styles.weekNavBtnDisabled]}
+              disabled={!weeklyData.hasPreviousWeekData}
+              onPress={() => setWeekOffset((prev) => prev - 1)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.weekNavArrow, !weeklyData.hasPreviousWeekData && styles.weekNavTextDisabled]}>◀</Text>
+              <Text style={[styles.weekNavBtnLabel, !weeklyData.hasPreviousWeekData && styles.weekNavTextDisabled]}>Previous Week</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.weekNavBtn, weekOffset >= 0 && styles.weekNavBtnDisabled]}
+              disabled={weekOffset >= 0}
+              onPress={() => setWeekOffset((prev) => prev + 1)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.weekNavBtnLabel, weekOffset >= 0 && styles.weekNavTextDisabled]}>Next Week</Text>
+              <Text style={[styles.weekNavArrow, weekOffset >= 0 && styles.weekNavTextDisabled]}>▶</Text>
+            </TouchableOpacity>
+          </View>
 
           {/* 7 Days Row */}
           <View style={styles.daysRow}>
-            {weeklyDays.map((day, idx) => (
+            {weeklyData.days.map((day, idx) => (
               <View key={idx} style={styles.dayColumn}>
                 <View
                   style={[
@@ -91,26 +128,6 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ appState, onTabC
                 >
                   {day.dayName}
                 </Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* 2. Card: Multi-Week Consistency */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Weekly Streak Consistency</Text>
-          <Text style={styles.cardDescription}>
-            Progress measured across past cycles:
-          </Text>
-
-          {/* Last 4 weeks */}
-          <View style={styles.weeksRow}>
-            {['Wk 36', 'Wk 37', 'Wk 38', 'This Wk'].map((label, idx) => (
-              <View key={idx} style={styles.weekItem}>
-                <View style={[styles.weekBar, styles.weekBarDone]}>
-                  <CheckIcon size={13} color={COLORS.textDark} />
-                </View>
-                <Text style={styles.weekLabel}>{label}</Text>
               </View>
             ))}
           </View>
@@ -386,35 +403,47 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontWeight: '700',
   },
-  weeksRow: {
+  weekSubTitle: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    color: COLORS.primaryMint,
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  weekNavRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.md,
     gap: 8,
   },
-  weekItem: {
-    flex: 1,
+  weekNavBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-  },
-  weekBar: {
-    width: '100%',
-    height: 46,
-    borderRadius: 14,
     backgroundColor: COLORS.surfaceElevated,
-    justifyContent: 'center',
-    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: RADII.pill,
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  weekBarDone: {
-    backgroundColor: COLORS.primaryMint,
-    borderColor: COLORS.primaryMint,
+  weekNavBtnDisabled: {
+    opacity: 0.35,
+    borderColor: 'transparent',
   },
-  weekLabel: {
+  weekNavArrow: {
+    fontSize: 10,
+    color: COLORS.primaryMint,
+  },
+  weekNavBtnLabel: {
     fontFamily: FONTS.sans,
     fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.textPrimary,
+  },
+  weekNavTextDisabled: {
     color: COLORS.textMuted,
-    fontWeight: '500',
   },
   segmentedProgressBar: {
     flexDirection: 'row',

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   ScrollView,
   SafeAreaView,
   StatusBar,
+  Modal,
 } from 'react-native';
 import { COLORS, RADII, SPACING, FONTS } from '../theme/theme';
 import { MinimalistDashboardProps } from '../types';
@@ -54,18 +55,33 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
     }));
   };
 
+  const [isSleepModalOpen, setIsSleepModalOpen] = useState(false);
+  const [modalSleepHours, setModalSleepHours] = useState<number>(appState.sleepHours > 0 ? appState.sleepHours : 7.5);
+  const [modalSleepQuality, setModalSleepQuality] = useState<string>(
+    appState.sleepQuality && appState.sleepQuality !== 'Not logged yet' ? appState.sleepQuality : 'Rested'
+  );
+
+  const openSleepModal = () => {
+    setModalSleepHours(appState.sleepHours > 0 ? appState.sleepHours : 7.5);
+    setModalSleepQuality(
+      appState.sleepQuality && appState.sleepQuality !== 'Not logged yet' ? appState.sleepQuality : 'Rested'
+    );
+    setIsSleepModalOpen(true);
+  };
+
+  const handleSaveSleep = () => {
+    onUpdateState({
+      sleepHours: modalSleepHours,
+      sleepQuality: modalSleepQuality,
+    });
+    setIsSleepModalOpen(false);
+  };
+
   const handleToggleMood = () => {
-    const moods = ['Calm', 'Flow', 'Relaxed', 'Tired', 'Tense'];
+    const moods = ['Calm', 'Flow', 'Tired'];
     const currentIdx = moods.indexOf(appState.moodLogged || 'Calm');
     const nextMood = moods[(currentIdx + 1) % moods.length];
     onUpdateState({ moodLogged: nextMood });
-  };
-
-  const handleToggleSleep = () => {
-    const qualities = ['Deep sleep (logged AM)', 'Rested (logged AM)', 'Light sleep (logged AM)'];
-    const currentIdx = qualities.indexOf(appState.sleepQuality);
-    const nextQuality = qualities[(currentIdx + 1) % qualities.length];
-    onUpdateState({ sleepQuality: nextQuality });
   };
 
   const isRain = appState.weather === 'rain';
@@ -75,12 +91,8 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
     switch (mood) {
       case 'Flow':
         return <MoodFlowIcon size={24} color={COLORS.accentLime} />;
-      case 'Relaxed':
-        return <MoodRelaxIcon size={24} color={COLORS.primaryMint} />;
       case 'Tired':
         return <MoodTiredIcon size={24} color={COLORS.textMuted} />;
-      case 'Tense':
-        return <MoodTenseIcon size={24} color={COLORS.softCoral} />;
       case 'Calm':
       default:
         return <MoodCalmIcon size={24} color={COLORS.primaryMint} />;
@@ -233,7 +245,7 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
             <TouchableOpacity
               style={styles.gridCard}
               activeOpacity={0.8}
-              onPress={handleToggleSleep}
+              onPress={openSleepModal}
             >
               <View style={styles.cardIconHeader}>
                 <View style={styles.iconCircle}>
@@ -246,7 +258,28 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
               <Text style={styles.habitValueBig}>
                 {appState.sleepHours > 0 ? `${appState.sleepHours}h` : '—'}
               </Text>
-              <Text style={styles.habitSubtext}>{appState.sleepQuality}</Text>
+              <Text style={styles.habitSubtext}>
+                {appState.sleepHours > 0 ? appState.sleepQuality : 'Tap to log'}
+              </Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.actionPillButton,
+                  appState.sleepHours > 0 && styles.actionPillButtonDone,
+                ]}
+                activeOpacity={0.8}
+                onPress={openSleepModal}
+              >
+                {appState.sleepHours > 0 && <CheckIcon size={13} color={COLORS.textDark} />}
+                <Text
+                  style={[
+                    styles.actionPillText,
+                    appState.sleepHours > 0 && styles.actionPillTextDone,
+                  ]}
+                >
+                  {appState.sleepHours > 0 ? 'Edit' : 'Log Sleep'}
+                </Text>
+              </TouchableOpacity>
             </TouchableOpacity>
           </View>
 
@@ -262,7 +295,7 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
             <View style={styles.moodTextCol}>
               <Text style={styles.habitCategory}>Mood & Energy (Evening check-in)</Text>
               <Text style={styles.habitValueMain}>{appState.moodLogged || 'Not logged yet'}</Text>
-              <Text style={styles.habitSubtext}>Learns from your lock-screen replies</Text>
+              <Text style={styles.habitSubtext}>3 distinct states: Calm, Flow, Tired</Text>
             </View>
             <View style={styles.moodClickHint}>
               <Text style={styles.moodClickHintText}>Change ❯</Text>
@@ -270,6 +303,116 @@ export const MinimalistDashboard: React.FC<MinimalistDashboardProps> = ({
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Sleep Logger Modal */}
+      <Modal
+        visible={isSleepModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsSleepModalOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Log Sleep</Text>
+                <Text style={styles.modalSubtitle}>Real sleep duration & recovery</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setIsSleepModalOpen(false)}
+                style={styles.modalCloseBtn}
+              >
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Stepper */}
+            <Text style={styles.modalSectionLabel}>Sleep Duration:</Text>
+            <View style={styles.sleepStepperRow}>
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() => setModalSleepHours((prev) => Math.max(3.0, +(prev - 0.5).toFixed(1)))}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.stepperBtnText}>-</Text>
+              </TouchableOpacity>
+
+              <View style={styles.stepperValueContainer}>
+                <Text style={styles.stepperValueText}>{modalSleepHours}</Text>
+                <Text style={styles.stepperValueUnit}>hours</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.stepperBtn}
+                onPress={() => setModalSleepHours((prev) => Math.min(14.0, +(prev + 0.5).toFixed(1)))}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.stepperBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Quick chips */}
+            <View style={styles.chipsRow}>
+              {[5.0, 6.0, 7.0, 7.5, 8.0, 9.0].map((hours) => (
+                <TouchableOpacity
+                  key={hours}
+                  style={[
+                    styles.chipBtn,
+                    modalSleepHours === hours && styles.chipBtnActive,
+                  ]}
+                  onPress={() => setModalSleepHours(hours)}
+                >
+                  <Text
+                    style={[
+                      styles.chipText,
+                      modalSleepHours === hours && styles.chipTextActive,
+                    ]}
+                  >
+                    {hours}h
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Quality selector */}
+            <Text style={styles.modalSectionLabel}>Rest Quality:</Text>
+            <View style={styles.qualityRow}>
+              {(['Rested', 'Moderate', 'Tired'] as const).map((q) => {
+                const isSelected = modalSleepQuality === q;
+                return (
+                  <TouchableOpacity
+                    key={q}
+                    style={[styles.qualityBtn, isSelected && styles.qualityBtnActive]}
+                    onPress={() => {
+                      setModalSleepQuality(q);
+                      if (q === 'Rested' && modalSleepHours === 7.5) setModalSleepHours(8.0);
+                      if (q === 'Moderate' && modalSleepHours === 7.5) setModalSleepHours(6.5);
+                      if (q === 'Tired' && modalSleepHours === 7.5) setModalSleepHours(5.0);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.qualityText, isSelected && styles.qualityTextActive]}>
+                      {q}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Action buttons */}
+            <View style={styles.modalActionRow}>
+              <TouchableOpacity
+                style={styles.saveSleepBtn}
+                onPress={handleSaveSleep}
+                activeOpacity={0.8}
+              >
+                <CheckIcon size={16} color={COLORS.textDark} />
+                <Text style={styles.saveSleepText}>Save Sleep Record</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Bottom Tab Navigator: Today, Progress, Settings */}
       <View style={styles.bottomNavContainer}>
@@ -583,5 +726,168 @@ const styles = StyleSheet.create({
   navTabLabelActive: {
     color: COLORS.primaryMint,
     fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: SPACING.lg,
+  },
+  modalCard: {
+    width: '100%',
+    backgroundColor: COLORS.surfaceCard,
+    borderRadius: RADII.card,
+    padding: SPACING.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: SPACING.lg,
+  },
+  modalTitle: {
+    fontFamily: FONTS.sans,
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+  },
+  modalSubtitle: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  modalCloseBtn: {
+    padding: 6,
+  },
+  modalCloseText: {
+    fontSize: 16,
+    color: COLORS.textMuted,
+    fontWeight: 'bold',
+  },
+  modalSectionLabel: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  sleepStepperRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 20,
+    marginBottom: SPACING.md,
+  },
+  stepperBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.surfaceElevated,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  stepperBtnText: {
+    fontFamily: FONTS.sans,
+    fontSize: 22,
+    fontWeight: '600',
+    color: COLORS.primaryMint,
+  },
+  stepperValueContainer: {
+    alignItems: 'center',
+    minWidth: 100,
+  },
+  stepperValueText: {
+    fontFamily: FONTS.mono,
+    fontSize: 32,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+  },
+  stepperValueUnit: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    color: COLORS.textMuted,
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: SPACING.lg,
+    gap: 6,
+  },
+  chipBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: RADII.pill,
+    backgroundColor: COLORS.surfaceElevated,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  chipBtnActive: {
+    backgroundColor: 'rgba(94, 234, 212, 0.15)',
+    borderColor: COLORS.primaryMint,
+  },
+  chipText: {
+    fontFamily: FONTS.sans,
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
+  },
+  chipTextActive: {
+    color: COLORS.primaryMint,
+    fontWeight: '700',
+  },
+  qualityRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: SPACING.xl,
+  },
+  qualityBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: RADII.pill,
+    backgroundColor: COLORS.surfaceElevated,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  qualityBtnActive: {
+    backgroundColor: COLORS.primaryMint,
+    borderColor: COLORS.primaryMint,
+  },
+  qualityText: {
+    fontFamily: FONTS.sans,
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
+  },
+  qualityTextActive: {
+    color: COLORS.textDark,
+    fontWeight: '700',
+  },
+  modalActionRow: {
+    marginTop: 4,
+  },
+  saveSleepBtn: {
+    backgroundColor: COLORS.primaryMint,
+    paddingVertical: 14,
+    borderRadius: RADII.pill,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  saveSleepText: {
+    fontFamily: FONTS.sans,
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.textDark,
   },
 });

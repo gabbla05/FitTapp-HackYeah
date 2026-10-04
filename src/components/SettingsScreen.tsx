@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity, Pla
 import { COLORS, RADII, SPACING, FONTS } from '../theme/theme';
 import { SettingsScreenProps } from '../types';
 import { SparkleIcon, SunIcon, CloudRainIcon, TabTodayIcon, TabProgressIcon, TabSettingsIcon, CheckIcon, ShieldIcon, ShieldLockIcon } from './common/Icons';
+import { resetAttentionBudget } from '../database/storageService';
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   appState,
@@ -18,7 +19,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
     onUpdateState({ weather });
   };
 
-  const resetDailyBudget = () => {
+  const resetDailyBudget = async () => {
+    await resetAttentionBudget();
     onUpdateState({ attentionBudgetUsed: 0 });
   };
 

@@ -24,6 +24,7 @@ import {
   getAttentionBudgetStatus,
   logHabitEvent,
   incrementAttentionBudget,
+  resetAttentionBudget,
   getRealStreakWeeks,
   calibrateAdaptiveGoal,
 } from './src/database/storageService';
@@ -157,27 +158,45 @@ export default function App() {
     }
     // 4. Sleep Prompt
     else if (actionId.startsWith('ACTION_SLEEP_') || (actionId.includes('DEFAULT') && data?.type === 'sleep')) {
-      const rawQuality = actionId.startsWith('ACTION_SLEEP_')
-        ? actionId.replace('ACTION_SLEEP_', '').toLowerCase()
-        : 'rested';
-      const formatted = rawQuality.charAt(0).toUpperCase() + rawQuality.slice(1);
+      let sleepHours = 7.5;
+      let formatted = 'Rested';
+      if (actionId === 'ACTION_SLEEP_RESTED') {
+        sleepHours = 8.0;
+        formatted = 'Rested';
+      } else if (actionId === 'ACTION_SLEEP_MODERATE') {
+        sleepHours = 6.5;
+        formatted = 'Moderate';
+      } else if (actionId === 'ACTION_SLEEP_TIRED' || actionId === 'ACTION_SLEEP_FATIGUED') {
+        sleepHours = 5.0;
+        formatted = 'Tired';
+      } else if (actionId.startsWith('ACTION_SLEEP_')) {
+        const rawQuality = actionId.replace('ACTION_SLEEP_', '').toLowerCase();
+        formatted = rawQuality.charAt(0).toUpperCase() + rawQuality.slice(1);
+      }
       await logHabitEvent({
         category: 'sleep',
-        value_num: 7.5,
+        value_num: sleepHours,
         value_text: formatted,
         feedback: null,
         weather_condition: null,
         temperature_c: null,
         source: 'lock_push',
       });
-      toastMessage = `🌙 Morning sleep logged: ${formatted}!`;
+      toastMessage = `🌙 Morning sleep logged: ${formatted} (${sleepHours}h)!`;
     }
     // 5. Mood Prompt
     else if (actionId.startsWith('ACTION_MOOD_') || (actionId.includes('DEFAULT') && data?.type === 'mood')) {
-      const rawMood = actionId.startsWith('ACTION_MOOD_')
-        ? actionId.replace('ACTION_MOOD_', '').toLowerCase()
-        : 'calm';
-      const formatted = rawMood.charAt(0).toUpperCase() + rawMood.slice(1);
+      let formatted = 'Calm';
+      if (actionId === 'ACTION_MOOD_CALM') {
+        formatted = 'Calm';
+      } else if (actionId === 'ACTION_MOOD_FLOW') {
+        formatted = 'Flow';
+      } else if (actionId === 'ACTION_MOOD_TIRED' || actionId === 'ACTION_MOOD_TENSE') {
+        formatted = 'Tired';
+      } else if (actionId.startsWith('ACTION_MOOD_')) {
+        const rawMood = actionId.replace('ACTION_MOOD_', '').toLowerCase();
+        formatted = rawMood.charAt(0).toUpperCase() + rawMood.slice(1);
+      }
       await logHabitEvent({
         category: 'mood',
         value_num: null,
@@ -335,7 +354,7 @@ export default function App() {
           source: 'in_app',
         });
       }
-      if (next.sleepQuality !== prev.sleepQuality) {
+      if (next.sleepQuality !== prev.sleepQuality || next.sleepHours !== prev.sleepHours) {
         logHabitEvent({
           category: 'sleep',
           value_num: next.sleepHours,
@@ -367,6 +386,9 @@ export default function App() {
           temperature_c: next.weatherDetails?.temperatureC ?? null,
           source: 'in_app',
         });
+      }
+      if (next.attentionBudgetUsed === 0 && prev.attentionBudgetUsed !== 0) {
+        resetAttentionBudget();
       }
 
       return next;
