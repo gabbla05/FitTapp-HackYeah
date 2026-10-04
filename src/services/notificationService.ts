@@ -19,24 +19,41 @@ export const NOTIFICATION_CATEGORIES = {
   FOOD: 'fittapp_food',
 };
 
+export const NOTIFICATION_CHANNEL_ID = 'fittapp_reminders_v1';
+
 /**
  * Registers interactive lock-screen action categories for iOS and Android
+ * and configures the native Android notification channel
  */
 export async function registerNotificationCategories(): Promise<void> {
   if (Platform.OS === 'web') return;
 
   try {
+    // 0. Ensure Android high-priority channel with lock-screen visibility
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync(NOTIFICATION_CHANNEL_ID, {
+        name: 'FitTapp Daily Habit Prompts',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#5EEAD4',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        bypassDnd: false,
+        sound: 'default',
+        enableVibrate: true,
+      });
+    }
+
     // 1. Water
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.WATER, [
       {
         identifier: 'ACTION_DRINK_250',
         buttonTitle: 'Drank it (+250ml)',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
       {
         identifier: 'ACTION_SNOOZE',
         buttonTitle: 'Snooze 1h',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
     ]);
 
@@ -44,13 +61,13 @@ export async function registerNotificationCategories(): Promise<void> {
     await Notifications.setNotificationCategoryAsync(NOTIFICATION_CATEGORIES.MOVEMENT_WALK, [
       {
         identifier: 'ACTION_START_WALK',
-        buttonTitle: 'Start Walk (GPS Map)',
+        buttonTitle: 'Start Walk (Live Map)',
         options: { opensAppToForeground: true },
       },
       {
         identifier: 'ACTION_SKIP',
         buttonTitle: 'Not now',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
     ]);
 
@@ -64,7 +81,7 @@ export async function registerNotificationCategories(): Promise<void> {
       {
         identifier: 'ACTION_SKIP',
         buttonTitle: 'Not today',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
     ]);
 
@@ -73,17 +90,17 @@ export async function registerNotificationCategories(): Promise<void> {
       {
         identifier: 'ACTION_SLEEP_RESTED',
         buttonTitle: 'Rested',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
       {
         identifier: 'ACTION_SLEEP_MODERATE',
         buttonTitle: 'Moderate',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
       {
         identifier: 'ACTION_SLEEP_FATIGUED',
         buttonTitle: 'Fatigued',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
     ]);
 
@@ -92,21 +109,21 @@ export async function registerNotificationCategories(): Promise<void> {
       {
         identifier: 'ACTION_MOOD_CALM',
         buttonTitle: 'Calm',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
       {
         identifier: 'ACTION_MOOD_FLOW',
         buttonTitle: 'Flow',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
       {
         identifier: 'ACTION_MOOD_TENSE',
         buttonTitle: 'Tense',
-        options: { opensAppToForeground: false },
+        options: { opensAppToForeground: true },
       },
     ]);
   } catch (err) {
-    console.warn('Error configuring notification categories:', err);
+    console.warn('Error configuring notification categories/channels:', err);
   }
 }
 
@@ -129,6 +146,20 @@ export async function requestNotificationPermissions(): Promise<boolean> {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }
+
+    if (finalStatus === 'granted' && Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync(NOTIFICATION_CHANNEL_ID, {
+        name: 'FitTapp Daily Habit Prompts',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#5EEAD4',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        bypassDnd: false,
+        sound: 'default',
+        enableVibrate: true,
+      });
+    }
+
     return finalStatus === 'granted';
   } catch (e) {
     console.warn('Error requesting notification permissions:', e);
@@ -167,6 +198,8 @@ export async function sendRealPushNotification(options: {
         categoryIdentifier: options.categoryIdentifier,
         data: options.data,
         sound: true,
+        autoDismiss: true,
+        ...(Platform.OS === 'android' ? { channelId: NOTIFICATION_CHANNEL_ID } : {}),
       },
       trigger: null, // immediate fire
     });
@@ -238,16 +271,42 @@ export async function sendMoodNotification(): Promise<string | null> {
 }
 
 /**
+ * Dismisses a single notification by ID
+ */
+export async function dismissNotification(notificationId: string): Promise<void> {
+  try {
+    await Notifications.dismissNotificationAsync(notificationId);
+  } catch (e) {
+    console.warn('Error dismissing notification:', e);
+  }
+}
+
+/**
+ * Dismisses all active notifications from drawer
+ */
+export async function dismissAllNotifications(): Promise<void> {
+  try {
+    await Notifications.dismissAllNotificationsAsync();
+  } catch (e) {
+    console.warn('Error dismissing all notifications:', e);
+  }
+}
+
+/**
  * Sets up a listener for lock screen button clicks
  */
 export function setupNotificationResponseListener(
-  onAction: (actionIdentifier: string, category: string, data: any) => void
+  onAction: (actionIdentifier: string, category: string, data: any, notificationId?: string) => void
 ) {
-  const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+  const subscription = Notifications.addNotificationResponseReceivedListener(async (response) => {
+    const notificationId = response.notification.request.identifier;
+    if (notificationId) {
+      await dismissNotification(notificationId);
+    }
     const actionIdentifier = response.actionIdentifier;
     const category = (response.notification.request.content as any).categoryIdentifier || '';
     const data = response.notification.request.content.data;
-    onAction(actionIdentifier, category, data);
+    onAction(actionIdentifier, category, data, notificationId);
   });
   return subscription;
 }
@@ -259,15 +318,21 @@ export async function checkColdStartNotificationResponse(): Promise<{
   actionIdentifier: string;
   category: string;
   data: any;
+  notificationId?: string;
 } | null> {
   if (Platform.OS === 'web') return null;
   try {
     const response = await Notifications.getLastNotificationResponseAsync();
     if (response) {
+      const notificationId = response.notification.request.identifier;
+      if (notificationId) {
+        await dismissNotification(notificationId);
+      }
       return {
         actionIdentifier: response.actionIdentifier,
         category: (response.notification.request.content as any).categoryIdentifier || '',
         data: response.notification.request.content.data,
+        notificationId,
       };
     }
   } catch (e) {

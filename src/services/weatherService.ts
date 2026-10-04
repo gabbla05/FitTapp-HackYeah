@@ -1,131 +1,138 @@
+import { WeatherContext } from '../types';
+import * as Location from 'expo-location';
+
 export interface LiveWeatherData {
-  condition: 'rain' | 'sunny';
+  condition: WeatherContext;
   temperatureC: number;
-  weatherCode: number;
   weatherDescription: string;
   isRaining: boolean;
   precipitationMm: number;
-  locationName?: string;
+  locationName: string;
   lastUpdated: string;
 }
 
 /**
- * Maps WMO Weather interpretation codes to human-readable English descriptions
- * and determines if it counts as adverse (rainy/stormy) weather for outdoor walks.
+ * Maps WMO Weather Interpretation Codes (0-99) to FitTapp UI conditions
+ * Standard defined by World Meteorological Organization
  */
-export function interpretWmoCode(code: number): { description: string; isRain: boolean } {
+export function interpretWmoCode(code: number): { description: string; isRain: boolean; condition: WeatherContext } {
   switch (code) {
     case 0:
-      return { description: 'Clear sky', isRain: false };
+      return { description: 'Clear sky', isRain: false, condition: 'sunny' };
     case 1:
-      return { description: 'Mainly clear', isRain: false };
+      return { description: 'Mainly clear', isRain: false, condition: 'sunny' };
     case 2:
-      return { description: 'Partly cloudy', isRain: false };
+      return { description: 'Partly cloudy', isRain: false, condition: 'sunny' };
     case 3:
-      return { description: 'Overcast', isRain: false };
+      return { description: 'Overcast', isRain: false, condition: 'sunny' };
     case 45:
+      return { description: 'Foggy', isRain: false, condition: 'sunny' };
     case 48:
-      return { description: 'Foggy', isRain: false };
+      return { description: 'Depositing rime fog', isRain: false, condition: 'sunny' };
     case 51:
     case 53:
     case 55:
-      return { description: 'Light drizzle', isRain: true };
-    case 56:
-    case 57:
-      return { description: 'Freezing drizzle', isRain: true };
+      return { description: 'Drizzle', isRain: true, condition: 'rain' };
     case 61:
-      return { description: 'Slight rain', isRain: true };
+      return { description: 'Slight rain', isRain: true, condition: 'rain' };
     case 63:
-      return { description: 'Moderate rain', isRain: true };
+      return { description: 'Moderate rain', isRain: true, condition: 'rain' };
     case 65:
-      return { description: 'Heavy rain', isRain: true };
-    case 66:
-    case 67:
-      return { description: 'Freezing rain', isRain: true };
+      return { description: 'Heavy rain', isRain: true, condition: 'rain' };
     case 71:
     case 73:
     case 75:
-      return { description: 'Snow fall', isRain: true };
+      return { description: 'Snow fall', isRain: true, condition: 'rain' };
     case 77:
-      return { description: 'Snow grains', isRain: true };
+      return { description: 'Snow grains', isRain: true, condition: 'rain' };
     case 80:
     case 81:
     case 82:
-      return { description: 'Rain showers', isRain: true };
+      return { description: 'Rain showers', isRain: true, condition: 'rain' };
     case 85:
     case 86:
-      return { description: 'Snow showers', isRain: true };
+      return { description: 'Snow showers', isRain: true, condition: 'rain' };
     case 95:
-      return { description: 'Thunderstorm', isRain: true };
+      return { description: 'Thunderstorm', isRain: true, condition: 'rain' };
     case 96:
     case 99:
-      return { description: 'Thunderstorm with hail', isRain: true };
+      return { description: 'Thunderstorm with hail', isRain: true, condition: 'rain' };
     default:
-      return { description: 'Variable weather', isRain: false };
+      return { description: 'Variable weather', isRain: false, condition: 'sunny' };
   }
 }
 
 /**
- * High-speed network IP geolocator fallback (works immediately on Android and Web)
+ * High-precision location detector prioritizing real hardware GPS, then fast IP fallback
  */
 export async function detectCurrentLocation(): Promise<{
   lat: number;
   lng: number;
   label: string;
 }> {
-  // Check cached coordinates first
-  if (typeof window !== 'undefined' && window.localStorage) {
-    try {
-      const saved = window.localStorage.getItem('fittapp_last_coord');
-      const savedLabel = window.localStorage.getItem('fittapp_last_label');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed?.lat === 'number' && typeof parsed?.lng === 'number') {
-          return {
-            lat: parsed.lat,
-            lng: parsed.lng,
-            label: savedLabel || 'Current Location',
-          };
-        }
+  // 1. Try real hardware GPS first via expo-location
+  try {
+    const { status } = await Location.getForegroundPermissionsAsync();
+    let permitted = status === 'granted';
+    if (!permitted) {
+      const req = await Location.requestForegroundPermissionsAsync();
+      permitted = req.status === 'granted';
+    }
+
+    if (permitted) {
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      if (pos && pos.coords) {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        let label = 'Current Location';
+
+        try {
+          const rev = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+          if (rev && rev.length > 0) {
+            const first = rev[0];
+            const city = first.city || first.subregion || first.region || first.name || 'Local Area';
+            const country = first.country || 'Poland';
+            label = `${city}, ${country}`;
+          }
+        } catch {}
+
+        return { lat, lng, label };
       }
-    } catch {}
+    }
+  } catch (err) {
+    console.warn('GPS location detection failed, attempting IP fallback:', err);
   }
 
-  // Fast Tier 1: ip-api.com (50ms response in Poland/Europe)
+  // 2. Fast Tier 1: ip-api.com (50ms response in Europe)
   try {
     const res = await fetch('http://ip-api.com/json/?fields=status,country,city,lat,lon');
     const data = await res.json();
     if (data && data.status === 'success' && data.lat && data.lon) {
-      const coord = {
+      return {
         lat: data.lat,
         lng: data.lon,
         label: `${data.city || 'Local Area'}, ${data.country || 'Poland'}`,
       };
-      if (typeof window !== 'undefined' && window.localStorage) {
-        try {
-          window.localStorage.setItem('fittapp_last_coord', JSON.stringify(coord));
-          window.localStorage.setItem('fittapp_last_label', coord.label);
-        } catch {}
-      }
-      return coord;
     }
   } catch {}
 
-  // Tier 2: ipwho.is
+  // 3. Fast Tier 2: ipwho.is
   try {
     const res2 = await fetch('https://ipwho.is/');
     const data2 = await res2.json();
     if (data2 && data2.success && data2.latitude && data2.longitude) {
-      const coord = {
+      return {
         lat: data2.latitude,
         lng: data2.longitude,
         label: `${data2.city || 'Local Area'}, ${data2.country || 'Poland'}`,
       };
-      return coord;
     }
   } catch {}
 
-  // Default fallback (Kraków)
+  // Default fallback (Central Poland)
   return { lat: 50.0697, lng: 19.9422, label: 'Kraków, Poland' };
 }
 
@@ -155,48 +162,44 @@ export async function fetchLiveWeather(
       4
     )}&current=temperature_2m,precipitation,rain,weather_code&timezone=auto`;
 
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Open-Meteo HTTP ${response.status}`);
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Open-Meteo responded with status ${res.status}`);
     }
 
-    const data = await response.json();
+    const data = await res.json();
     const current = data.current;
-    const weatherCode = current?.weather_code ?? 0;
-    const precipitation = current?.precipitation ?? 0;
-    const { description, isRain: codeIsRain } = interpretWmoCode(weatherCode);
 
-    // If precipitation > 0.1 mm or WMO code represents rain/snow
-    const isRaining = codeIsRain || precipitation > 0.1;
-    const condition = isRaining ? 'rain' : 'sunny';
-    const temperatureC = Math.round(current?.temperature_2m ?? 18);
+    const temp = Math.round(current.temperature_2m);
+    const code = current.weather_code;
+    const precipitation = current.precipitation || 0;
+
+    const { description, isRain, condition } = interpretWmoCode(code);
 
     const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
-      now.getMinutes()
-    ).padStart(2, '0')}`;
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    const timeStr = `${hours}:${minutes}`;
 
     return {
       condition,
-      temperatureC,
-      weatherCode,
+      temperatureC: temp,
       weatherDescription: description,
-      isRaining,
+      isRaining: isRain,
       precipitationMm: precipitation,
       locationName: targetLabel || 'Local Area',
       lastUpdated: timeStr,
     };
   } catch (error) {
-    console.warn('Live weather fetch failed, using fallback:', error);
+    console.warn('Weather fetch error, falling back to sunny default:', error);
     return {
       condition: 'sunny',
-      temperatureC: 18,
-      weatherCode: 0,
-      weatherDescription: 'Clear sky (Offline)',
+      temperatureC: 14,
+      weatherDescription: 'Clear sky (offline mode)',
       isRaining: false,
       precipitationMm: 0,
-      locationName: locationName || 'Local Area',
-      lastUpdated: 'Just now',
+      locationName: targetLabel || 'Local Area',
+      lastUpdated: 'Live',
     };
   }
 }

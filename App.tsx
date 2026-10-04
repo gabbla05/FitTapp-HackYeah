@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   View,
+  Text,
   SafeAreaView,
   StatusBar,
   Platform,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
 import { ActiveWalkMapScreen } from './src/components/ActiveWalkMapScreen';
 import { MinimalistDashboard } from './src/components/MinimalistDashboard';
@@ -42,6 +44,7 @@ export default function App() {
   // Default to main in-app screen
   const [currentRoute, setCurrentRoute] = useState<ScreenRoute>('app');
   const [activeTab, setActiveTab] = useState<'today' | 'progress' | 'settings'>('today');
+  const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 
   // Global State for FitTapp
   const [appState, setAppState] = useState<AppStateData>({
@@ -83,9 +86,123 @@ export default function App() {
     }
   }, []);
 
-  // Initialize Database, User Profile & Native Notification Listeners
+  // Helper to re-query SQLite and update dashboard metrics in real time
+  const syncTodayStateFromDb = async () => {
+    try {
+      const summary = await getTodayHabitSummary();
+      const budget = await getAttentionBudgetStatus();
+      setAppState((prev) => ({
+        ...prev,
+        waterMl: summary.waterMl,
+        movementDone: summary.movementDone,
+        movementType: summary.movementType,
+        sleepHours: summary.sleepHours,
+        sleepQuality: summary.sleepQuality,
+        moodLogged: summary.moodLogged,
+        foodLogged: summary.foodLogged,
+        attentionBudgetUsed: budget.pushedCount,
+        attentionBudgetTotal: budget.dailyCap,
+      }));
+    } catch (e) {
+      console.warn('Error reading updated habit summary from DB:', e);
+    }
+  };
+
+  // Unified Handler for Lock-Screen Notification Button Clicks & Taps
+  const handleNotificationAction = async (actionId: string, category: string, data: any) => {
+    let toastMessage = '';
+
+    // 1. Water Prompt
+    if (actionId === 'ACTION_DRINK_250' || (actionId.includes('DEFAULT') && data?.type === 'water')) {
+      await logHabitEvent({
+        category: 'water',
+        value_num: 250,
+        value_text: '+250ml',
+        feedback: null,
+        weather_condition: null,
+        temperature_c: null,
+        source: 'lock_push',
+      });
+      toastMessage = '💧 Logged +250ml Water from Lock Screen!';
+    }
+    // 2. Outdoor Walk Prompt
+    else if (
+      actionId === 'ACTION_START_WALK' ||
+      category === NOTIFICATION_CATEGORIES.MOVEMENT_WALK ||
+      (actionId.includes('DEFAULT') && data?.type === 'walk')
+    ) {
+      setCurrentRoute('walk_map');
+      toastMessage = '🏃 Opening Live GPS Walk Tracking...';
+    }
+    // 3. Desk Stretch Prompt
+    else if (
+      actionId === 'ACTION_START_STRETCH' ||
+      category === NOTIFICATION_CATEGORIES.MOVEMENT_STRETCH ||
+      (actionId.includes('DEFAULT') && data?.type === 'stretch')
+    ) {
+      await logHabitEvent({
+        category: 'movement',
+        value_num: 2.0,
+        value_text: 'stretch',
+        feedback: 'just_right',
+        weather_condition: 'rain',
+        temperature_c: null,
+        source: 'lock_push',
+      });
+      toastMessage = '🧘 2-min Desk Stretch logged!';
+    }
+    // 4. Sleep Prompt
+    else if (actionId.startsWith('ACTION_SLEEP_') || (actionId.includes('DEFAULT') && data?.type === 'sleep')) {
+      const rawQuality = actionId.startsWith('ACTION_SLEEP_')
+        ? actionId.replace('ACTION_SLEEP_', '').toLowerCase()
+        : 'rested';
+      const formatted = rawQuality.charAt(0).toUpperCase() + rawQuality.slice(1);
+      await logHabitEvent({
+        category: 'sleep',
+        value_num: 7.5,
+        value_text: formatted,
+        feedback: null,
+        weather_condition: null,
+        temperature_c: null,
+        source: 'lock_push',
+      });
+      toastMessage = `🌙 Morning sleep logged: ${formatted}!`;
+    }
+    // 5. Mood Prompt
+    else if (actionId.startsWith('ACTION_MOOD_') || (actionId.includes('DEFAULT') && data?.type === 'mood')) {
+      const rawMood = actionId.startsWith('ACTION_MOOD_')
+        ? actionId.replace('ACTION_MOOD_', '').toLowerCase()
+        : 'calm';
+      const formatted = rawMood.charAt(0).toUpperCase() + rawMood.slice(1);
+      await logHabitEvent({
+        category: 'mood',
+        value_num: null,
+        value_text: formatted,
+        feedback: null,
+        weather_condition: null,
+        temperature_c: null,
+        source: 'lock_push',
+      });
+      toastMessage = `⚡ Evening reflection logged: ${formatted}!`;
+    }
+    // 6. Skip / Snooze
+    else if (actionId === 'ACTION_SKIP' || actionId === 'ACTION_SNOOZE') {
+      toastMessage = 'Notification dismissed.';
+    }
+
+    if (toastMessage) {
+      setFeedbackToast(toastMessage);
+      setTimeout(() => setFeedbackToast(null), 3500);
+    }
+
+    // Refresh state from database immediately
+    await syncTodayStateFromDb();
+  };
+
+  // Initialize Database, User Profile, Native Notification Listeners & AppState
   useEffect(() => {
     let sub: any = null;
+    let appStateSub: any = null;
 
     const startup = async () => {
       // 1. Initialize SQLite on device or storage on web
@@ -101,99 +218,48 @@ export default function App() {
       }
 
       // 3. Load today's persistent records from DB
-      const summary = await getTodayHabitSummary();
-      const budget = await getAttentionBudgetStatus();
+      await syncTodayStateFromDb();
 
-      setAppState((prev) => ({
-        ...prev,
-        waterMl: summary.waterMl,
-        movementDone: summary.movementDone,
-        movementType: summary.movementType,
-        sleepHours: summary.sleepHours,
-        sleepQuality: summary.sleepQuality,
-        moodLogged: summary.moodLogged,
-        foodLogged: summary.foodLogged,
-        attentionBudgetUsed: budget.pushedCount,
-        attentionBudgetTotal: budget.dailyCap,
-      }));
-
-      // 4. Configure real notifications
+      // 4. Configure real notifications and Android channels
       await registerNotificationCategories();
       await requestNotificationPermissions();
 
       // 5. Setup Action Click Listener from Lock-Screen Push Notifications
-      sub = setupNotificationResponseListener((actionId, category) => {
-        if (actionId === 'ACTION_DRINK_250') {
-          logHabitEvent({
-            category: 'water',
-            value_num: 250,
-            value_text: '+250ml',
-            feedback: null,
-            weather_condition: null,
-            temperature_c: null,
-            source: 'lock_push',
-          });
-          setAppState((prev) => ({ ...prev, waterMl: prev.waterMl + 250 }));
-        } else if (
-          actionId === 'ACTION_START_WALK' ||
-          (category === NOTIFICATION_CATEGORIES.MOVEMENT_WALK && actionId.includes('DEFAULT'))
-        ) {
-          // Open Live Walk Map directly from lock-screen notification!
-          setCurrentRoute('walk_map');
-        } else if (actionId === 'ACTION_START_STRETCH') {
-          logHabitEvent({
-            category: 'movement',
-            value_num: 2.0,
-            value_text: 'stretch',
-            feedback: 'just_right',
-            weather_condition: 'rain',
-            temperature_c: null,
-            source: 'lock_push',
-          });
-          setAppState((prev) => ({ ...prev, movementDone: true, movementType: 'stretch' }));
-        } else if (actionId.startsWith('ACTION_SLEEP_')) {
-          const quality = actionId.replace('ACTION_SLEEP_', '');
-          logHabitEvent({
-            category: 'sleep',
-            value_num: 7.5,
-            value_text: quality,
-            feedback: null,
-            weather_condition: null,
-            temperature_c: null,
-            source: 'lock_push',
-          });
-          setAppState((prev) => ({ ...prev, sleepQuality: quality }));
-        } else if (actionId.startsWith('ACTION_MOOD_')) {
-          const mood = actionId.replace('ACTION_MOOD_', '');
-          logHabitEvent({
-            category: 'mood',
-            value_num: null,
-            value_text: mood,
-            feedback: null,
-            weather_condition: null,
-            temperature_c: null,
-            source: 'lock_push',
-          });
-          setAppState((prev) => ({ ...prev, moodLogged: mood }));
-        }
+      sub = setupNotificationResponseListener((actionId, category, data) => {
+        handleNotificationAction(actionId, category, data);
       });
 
-      // 6. Check if app was cold-launched by tapping a Walk notification
+      // 6. Check if app was cold-launched by tapping a notification
       const coldStartResponse = await checkColdStartNotificationResponse();
       if (coldStartResponse) {
-        if (
-          coldStartResponse.actionIdentifier === 'ACTION_START_WALK' ||
-          coldStartResponse.category === NOTIFICATION_CATEGORIES.MOVEMENT_WALK
-        ) {
-          setCurrentRoute('walk_map');
-        }
+        handleNotificationAction(
+          coldStartResponse.actionIdentifier,
+          coldStartResponse.category,
+          coldStartResponse.data
+        );
       }
+
+      // 7. Re-sync DB when app is brought from background to foreground
+      appStateSub = AppState.addEventListener('change', async (nextState) => {
+        if (nextState === 'active') {
+          await syncTodayStateFromDb();
+          const resumeNotification = await checkColdStartNotificationResponse();
+          if (resumeNotification) {
+            handleNotificationAction(
+              resumeNotification.actionIdentifier,
+              resumeNotification.category,
+              resumeNotification.data
+            );
+          }
+        }
+      });
     };
 
     startup();
 
     return () => {
       if (sub?.remove) sub.remove();
+      if (appStateSub?.remove) appStateSub.remove();
     };
   }, []);
 
@@ -399,6 +465,12 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor={COLORS.background} />
 
       <View style={styles.phoneFrame}>
+        {feedbackToast && (
+          <View style={styles.toastContainer}>
+            <Text style={styles.toastText}>{feedbackToast}</Text>
+          </View>
+        )}
+
         {/* ROUTE 1: In-App Live GPS Map Screen (Opened only when starting a walk or via notification) */}
         {currentRoute === 'walk_map' && (
           <ActiveWalkMapScreen
@@ -466,5 +538,30 @@ const styles = StyleSheet.create({
   },
   appContainer: {
     flex: 1,
+  },
+  toastContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'android' ? 24 : 48,
+    left: 16,
+    right: 16,
+    backgroundColor: '#0F172A',
+    borderColor: COLORS.primaryMint,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    zIndex: 99999,
+    elevation: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    alignItems: 'center',
+  },
+  toastText: {
+    color: COLORS.primaryMint,
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });

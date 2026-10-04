@@ -26,6 +26,7 @@ import {
   RefreshIcon,
 } from './common/Icons';
 import { detectCurrentLocation } from '../services/weatherService';
+import * as Location from 'expo-location';
 
 interface ActiveWalkMapScreenProps {
   onFinishWalk: (feedback: ActivityFeedback, distanceKm: number) => void;
@@ -186,30 +187,53 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
       .catch(() => {});
   };
 
-  const detectLiveLocation = () => {
+  const detectLiveLocation = async () => {
     setIsLocating(true);
-    setGpsStatus('Detecting GPS location...');
+    setGpsStatus('Requesting GPS fix...');
 
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const current: Coordinate = {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-          };
-          saveAndSetLocation(current);
-          prevLocationRef.current = current;
-          setIsLocating(false);
-          handleRecenter();
-          reverseGeocode(current.lat, current.lng);
-        },
-        () => {
-          setIsLocating(false);
-        },
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
-      );
-    } else {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setGpsStatus('Location permission not granted');
+        setIsLocating(false);
+        return;
+      }
+
+      setGpsStatus('Fixing phone satellite GPS...');
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      const current: Coordinate = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      };
+
+      saveAndSetLocation(current);
+      prevLocationRef.current = current;
       setIsLocating(false);
+      handleRecenter();
+
+      try {
+        const rev = await Location.reverseGeocodeAsync({
+          latitude: current.lat,
+          longitude: current.lng,
+        });
+        if (rev && rev.length > 0) {
+          const first = rev[0];
+          const road = first.street ? `${first.street}${first.streetNumber ? ' ' + first.streetNumber : ''}, ` : '';
+          const locality = first.city || first.subregion || first.region || first.name || '';
+          const label = locality ? `${road}${locality}` : `${current.lat.toFixed(4)}°N, ${current.lng.toFixed(4)}°E`;
+          setLocationLabel(label);
+          setGpsStatus(`Live GPS • ${label}`);
+        }
+      } catch {
+        reverseGeocode(current.lat, current.lng);
+      }
+    } catch (err) {
+      console.warn('Live GPS location failed:', err);
+      setIsLocating(false);
+      setGpsStatus('GPS offline • Tap center to retry');
     }
   };
 
@@ -253,47 +277,99 @@ export const ActiveWalkMapScreen: React.FC<ActiveWalkMapScreenProps> = ({
   };
 
   useEffect(() => {
-    // 1. Immediately center map on user's real location via fast IP lookup
-    detectCurrentLocation().then((loc) => {
-      setUserLocation({ lat: loc.lat, lng: loc.lng });
-      setLocationLabel(loc.label);
-      setGpsStatus(`Live • ${loc.label}`);
-    });
+    let watchSubscription: Location.LocationSubscription | null = null;
+    let isMounted = true;
 
-    // 2. Refine with hardware GPS
-    detectLiveLocation();
+    const startGpsTracking = async () => {
+      setIsLocating(true);
+      setGpsStatus('Acquiring phone GPS...');
 
-    // 3. Watch continuous movement, filtering jitter under 8 meters
-    let watchId: number | null = null;
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      watchId = navigator.geolocation.watchPosition(
-        (position) => {
-          const newPos: Coordinate = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          const fallback = await detectCurrentLocation();
+          if (isMounted) {
+            setUserLocation({ lat: fallback.lat, lng: fallback.lng });
+            setLocationLabel(fallback.label);
+            setGpsStatus(`City Fallback • ${fallback.label}`);
+            setIsLocating(false);
+          }
+          return;
+        }
+
+        const pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+
+        if (isMounted) {
+          const current: Coordinate = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
           };
-          saveAndSetLocation(newPos);
+          saveAndSetLocation(current);
+          prevLocationRef.current = current;
+          setIsLocating(false);
+          handleRecenter();
 
-          if (prevLocationRef.current) {
-            const addedDist = calculateDistance(prevLocationRef.current, newPos);
-            // Require at least 8 meters of real movement to filter GPS jitter while sitting still
-            if (addedDist >= 0.008 && addedDist < 0.3) {
-              setDistanceKm((prev) => +(prev + addedDist).toFixed(2));
-              setSteps((prev) => prev + Math.round(addedDist * 1350));
+          Location.reverseGeocodeAsync({
+            latitude: current.lat,
+            longitude: current.lng,
+          })
+            .then((rev) => {
+              if (rev && rev.length > 0 && isMounted) {
+                const first = rev[0];
+                const road = first.street ? `${first.street}${first.streetNumber ? ' ' + first.streetNumber : ''}, ` : '';
+                const locality = first.city || first.subregion || first.region || first.name || '';
+                const label = locality ? `${road}${locality}` : `${current.lat.toFixed(4)}°N, ${current.lng.toFixed(4)}°E`;
+                setLocationLabel(label);
+                setGpsStatus(`Live GPS • ${label}`);
+              }
+            })
+            .catch(() => {});
+        }
+
+        watchSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 2000,
+            distanceInterval: 4,
+          },
+          (location) => {
+            if (!isMounted) return;
+            const newPos: Coordinate = {
+              lat: location.coords.latitude,
+              lng: location.coords.longitude,
+            };
+            saveAndSetLocation(newPos);
+
+            if (prevLocationRef.current) {
+              const addedDist = calculateDistance(prevLocationRef.current, newPos);
+              // Filter out GPS drift (under 5m) while sitting still
+              if (addedDist >= 0.005 && addedDist < 0.3) {
+                setDistanceKm((prev) => +(prev + addedDist).toFixed(2));
+                setSteps((prev) => prev + Math.round(addedDist * 1350));
+                prevLocationRef.current = newPos;
+              }
+            } else {
               prevLocationRef.current = newPos;
             }
-          } else {
-            prevLocationRef.current = newPos;
           }
-        },
-        () => {},
-        { enableHighAccuracy: true, maximumAge: 5000 }
-      );
-    }
+        );
+      } catch (e) {
+        console.warn('GPS initial setup failed:', e);
+        if (isMounted) {
+          setIsLocating(false);
+          setGpsStatus('GPS offline • Tap center to retry');
+        }
+      }
+    };
+
+    startGpsTracking();
 
     return () => {
-      if (watchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchId);
+      isMounted = false;
+      if (watchSubscription) {
+        watchSubscription.remove();
       }
     };
   }, []);
